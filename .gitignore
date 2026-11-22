@@ -1,0 +1,74 @@
+# ---- Shared -----------------------------------------------------------------
+# Secrets and local env files (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Logs and runtime data
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+pids
+*.pid
+*.pid.lock
+*.seed
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Temp
+.temp
+.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# ---- frontend (Next.js) -----------------------------------------------------
+/frontend/.next/
+/frontend/out/
+/frontend/next-env.d.ts
+/frontend/.vercel
+/frontend/.pnp
+/frontend/.pnp.*
+/frontend/.yarn/*
+!/frontend/.yarn/patches
+!/frontend/.yarn/plugins
+!/frontend/.yarn/releases
+!/frontend/.yarn/versions
+*.pem
+
+# ---- backend/workflow (Python) ----------------------------------------------
+__pycache__/
+*.py[oc]
+wheels/
+*.egg-info
+.venv/
