@@ -1,4 +1,5 @@
 export * from './workspace.enums';
+export * from './permission-keys';
 export * from './permissions';
 export * from './workspaces';
 export * from './workspace-roles';

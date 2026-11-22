@@ -109,46 +109,31 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
   v_user_id uuid := app.current_user_id();
-  v_override text;
+  v_result boolean;
 BEGIN
   IF v_user_id IS NULL OR p_workspace_id IS NULL OR p_permission IS NULL THEN
     RETURN false;
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM public.workspaces w
-    WHERE w.id = p_workspace_id AND w.owner_id = v_user_id
-  ) THEN
-    RETURN true;
-  END IF;
+  -- Single statement: every join is a primary-key lookup.
+  SELECT CASE
+           WHEN w.owner_id = v_user_id THEN true
+           WHEN m.user_id IS NULL THEN false
+           WHEN o.effect IS NOT NULL THEN o.effect = 'allow'
+           ELSE EXISTS (
+             SELECT 1 FROM public.role_permissions rp
+             WHERE rp.role_id = m.role_id AND rp.permission_key = p_permission
+           )
+         END
+  INTO v_result
+  FROM public.workspaces w
+  LEFT JOIN public.workspace_members m
+    ON m.workspace_id = w.id AND m.user_id = v_user_id
+  LEFT JOIN public.member_permission_overrides o
+    ON o.workspace_id = w.id AND o.user_id = v_user_id AND o.permission_key = p_permission
+  WHERE w.id = p_workspace_id;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM public.workspace_members m
-    WHERE m.workspace_id = p_workspace_id AND m.user_id = v_user_id
-  ) THEN
-    RETURN false;
-  END IF;
-
-  SELECT o.effect::text INTO v_override
-  FROM public.member_permission_overrides o
-  WHERE o.workspace_id = p_workspace_id
-    AND o.user_id = v_user_id
-    AND o.permission_key = p_permission;
-
-  IF v_override = 'deny' THEN
-    RETURN false;
-  ELSIF v_override = 'allow' THEN
-    RETURN true;
-  END IF;
-
-  RETURN EXISTS (
-    SELECT 1
-    FROM public.workspace_members m
-    JOIN public.role_permissions rp ON rp.role_id = m.role_id
-    WHERE m.workspace_id = p_workspace_id
-      AND m.user_id = v_user_id
-      AND rp.permission_key = p_permission
-  );
+  RETURN COALESCE(v_result, false);
 END;
 $$;
 
