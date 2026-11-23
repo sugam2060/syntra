@@ -24,6 +24,8 @@ export const sessions = pgTable(
     ip: inet(),
     expiresAt: timestamp({ withTimezone: true }).notNull(),
     revokedAt: timestamp({ withTimezone: true }),
+    /** Set only when the session was replaced by a successor (refresh). Replaying such a token is theft. */
+    rotatedAt: timestamp({ withTimezone: true }),
     createdAt: createdAt(),
   },
   (table) => [

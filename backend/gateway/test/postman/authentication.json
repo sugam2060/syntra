@@ -1,0 +1,1891 @@
+{
+  "info": {
+    "_postman_id": "c1d6a0e4-5b7a-4f0e-9a52-7a3d2f6b8e01",
+    "name": "Syntra Gateway - Authentication",
+    "description": "Manual tests for the Syntra gateway authentication API (`/api/v1/authentication`).\n\n## Setup\n1. From the repo root: `docker compose up -d postgres redis mailpit`\n2. From `backend/gateway`: `npm run db:migrate`, then `npm run start:dev`\n3. Keep the gateway on port 3000 (required for the Google OAuth callback).\n4. Mailpit UI: http://localhost:8025 (verification and reset emails are delivered there through a queue; allow a second).\n\n## Running\n- Run folders 1 to 6 in order (folder 7 is manual) or use the Collection Runner. Register creates an INACTIVE account and does not sign you in. Verify the email (folder 2) to activate it, then run Login (folder 3) to start a session. Set the collection variables `email`, `password` and `name` to the account you want (Collection > Variables, current value). Nothing in the collection overwrites them; only an empty `email` is filled with a throwaway address on the first Register.\n- The refresh token is an httpOnly cookie named `refresh_token` (path `/api/v1/authentication`). Enable the cookie jar for localhost (Settings > Cookies); do not set a Cookie header manually.\n- Protected requests use Bearer `{{accessToken}}`, saved automatically by Register, Login and Refresh. Public requests override auth to No Auth.\n- Google sign-in must be done in a browser (see folder 5).\n\n## Rate limiting\nlogin, register, forgot-password, reset-password and resend-verification have a strict throttle: 10 requests per minute by default (`AUTH_THROTTLE_LIMIT`, `THROTTLE_TTL_MS`). Exceeding it returns 429; wait a minute.\n\n## Your own account\nSet `email`, `password` and `name`, then run Register once (or Login if the account exists; a second Register returns 409). Reset password uses `newPassword`. Verification and reset emails are delivered to the local Mailpit inbox (`mailpitUrl`), never to a real mailbox.\n\nFolder 7 (API keys) is manual: it needs a workspace you own (see its description) and is skipped while workspaceId is empty.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Sign up",
+      "description": "Creates an inactive account. Nothing here signs you in.",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Uses the collection variables email, password and name exactly as you set them.",
+                  "// Only when email is empty is a throwaway address generated (first run convenience).",
+                  "if (!pm.collectionVariables.get('email')) {",
+                  "  pm.collectionVariables.set('email', 'postman-' + Date.now() + '@test.local');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Returns the new user and no tokens (login is a separate step)', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('user').that.is.an('object');",
+                  "  pm.expect(json.user.email).to.eql(pm.collectionVariables.get('email'));",
+                  "  pm.expect(json.user.emailVerified).to.eql(false);",
+                  "  pm.expect(json).to.not.have.property('accessToken');",
+                  "  pm.expect(json).to.not.have.property('refreshToken');",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "});",
+                  "pm.test('No refresh_token cookie is set by register', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/register",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "register"
+              ]
+            },
+            "description": "Creates the account from {{email}}, {{password}} and {{name}} and queues a verification email. The account starts INACTIVE (is_active=false) and is not signed in: expect 201 with only {user} (emailVerified=false), no accessToken and no refresh_token cookie. Verify the email (folder 2), then log in (folder 3). Nothing is overwritten: set those variables first (an empty {{email}} is filled with a throwaway address once). Registering the same email again returns 409. Strict throttle applies.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"{{name}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Login before verifying (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403 while the email is not verified', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Error is EMAIL_NOT_VERIFIED', function () {",
+                  "  pm.expect(pm.response.json().error).to.eql('EMAIL_NOT_VERIFIED');",
+                  "});",
+                  "pm.test('No refresh_token cookie is set', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/login",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "login"
+              ]
+            },
+            "description": "Run right after Register and BEFORE Verify email. The password is correct but the account is still inactive, so login is refused with 403 and error EMAIL_NOT_VERIFIED. After Verify email succeeds, the same credentials work in folder 3. (With a wrong password the answer is a generic 401, so the verification state is only shown to the owner of the password.) If you already verified this account, this request returns 200 instead.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Email verification",
+      "description": "Verifying the email activates the account.",
+      "item": [
+        {
+          "name": "Get verification token from Mailpit",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The email is sent by a background queue, so it may arrive a moment after the API call.",
+                  "// Poll Mailpit (up to ~10s) for a message to {{email}} whose subject contains the keyword.",
+                  "const base = pm.collectionVariables.get('mailpitUrl');",
+                  "const query = 'to:' + pm.collectionVariables.get('email') + ' subject:verify';",
+                  "const url = base + '/api/v1/search?query=' + encodeURIComponent(query) + '&limit=1';",
+                  "let attempts = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest({ url: url, method: 'GET' }, function (err, res) {",
+                  "    const found = !err && res.json().messages && res.json().messages.length > 0;",
+                  "    if (found || attempts >= 20) { return; }",
+                  "    attempts += 1;",
+                  "    setTimeout(poll, 500);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Mailpit has a message for the test email', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.messages, 'no mail yet: wait a second (queue) and resend').to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "const messages = pm.response.json().messages || [];",
+                  "if (messages.length) {",
+                  "  pm.sendRequest({ url: pm.collectionVariables.get('mailpitUrl') + '/api/v1/message/' + messages[0].ID, method: 'GET' }, function (err, res) {",
+                  "    pm.test('Extracted verification token from the message', function () {",
+                  "      pm.expect(err).to.be.null;",
+                  "      const message = res.json();",
+                  "      const haystack = (message.Text || '') + '\\n' + (message.HTML || '');",
+                  "      const match = haystack.match(/token=([A-Za-z0-9_-]+)/);",
+                  "      pm.expect(match, 'token link not found in the email').to.not.be.null;",
+                  "      pm.collectionVariables.set('verificationToken', match[1]);",
+                  "    });",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}%20subject:verify&limit=1",
+              "host": [
+                "{{mailpitUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "to:{{email}} subject:verify"
+                },
+                {
+                  "key": "limit",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Finds the newest verification email to {{email}} in Mailpit (subject contains \"verify\"), waiting up to ~10 seconds for the background email queue to deliver it, and extracts ?token=... into the matching variable. Expected: 200."
+          }
+        },
+        {
+          "name": "Verify email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/verify-email",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "verify-email"
+              ]
+            },
+            "description": "Consumes {{verificationToken}} (single use), marks the email verified AND activates the account (is_active=true). Public. Expected: 204.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verificationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Resend verification",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 202', function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/resend-verification",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "resend-verification"
+              ]
+            },
+            "description": "Queues a new verification email for {{email}} and invalidates the previous link. Public, because an unverified account cannot sign in. Always 202, whether or not the email exists or is already verified. Strict throttle. Run Get verification token from Mailpit again afterwards.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Sign in and session",
+      "description": "Needs a verified account.",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Body has accessToken, tokenType, expiresIn and user', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('accessToken').that.is.a('string').and.not.empty;",
+                  "  pm.expect(json).to.have.property('tokenType');",
+                  "  pm.expect(json).to.have.property('expiresIn');",
+                  "  pm.expect(json).to.have.property('user').that.is.an('object');",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "  if (json.user && json.user.id) { pm.collectionVariables.set('userId', json.user.id); }",
+                  "});",
+                  "pm.test('refresh_token cookie is stored in the jar', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token'), 'enable the cookie jar for localhost').to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/login",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "login"
+              ]
+            },
+            "description": "Signs in with {{email}} / {{password}}. This is the only step that starts a session. Requires a verified email (otherwise 403 EMAIL_NOT_VERIFIED). Expected: 200 with {accessToken, tokenType, expiresIn, user}; sets the refresh_token cookie.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Refresh (rotates cookie)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Body has accessToken, tokenType, expiresIn and user', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('accessToken').that.is.a('string').and.not.empty;",
+                  "  pm.expect(json).to.have.property('tokenType');",
+                  "  pm.expect(json).to.have.property('expiresIn');",
+                  "  pm.expect(json).to.have.property('user').that.is.an('object');",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "  if (json.user && json.user.id) { pm.collectionVariables.set('userId', json.user.id); }",
+                  "});",
+                  "pm.test('refresh_token cookie is stored in the jar', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token'), 'enable the cookie jar for localhost').to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/refresh",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "refresh"
+              ]
+            },
+            "description": "No body; uses the refresh_token cookie from the jar. Expected: 200 with a new access token and a rotated cookie. Do not run two refreshes at once: reusing a rotated token revokes all sessions."
+          }
+        },
+        {
+          "name": "Me",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns the registered user and how they can sign in', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('id');",
+                  "  pm.expect(json.email).to.eql(pm.collectionVariables.get('email'));",
+                  "  pm.expect(json.hasPassword).to.be.a('boolean');",
+                  "  pm.expect(json.providers).to.be.an('array');",
+                  "  pm.collectionVariables.set('userId', json.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/me",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "me"
+              ]
+            },
+            "description": "Returns the current user, whether they have a password (hasPassword) and their linked social accounts (providers). Requires Bearer {{accessToken}}. Expected: 200."
+          }
+        },
+        {
+          "name": "Change password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns a fresh session', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "});",
+                  "pm.test('A new refresh_token cookie is stored', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/change-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "change-password"
+              ]
+            },
+            "description": "Changes the password from {{password}} to {{newPassword}}. All other sessions are revoked and this call returns a fresh session (new accessToken and refresh_token cookie). Strict throttle. Run \"Change password back\" right after so {{password}} keeps working for the rest of the collection.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{password}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Change password back",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns a fresh session', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "});",
+                  "pm.test('A new refresh_token cookie is stored', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/change-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "change-password"
+              ]
+            },
+            "description": "Restores the original password: changes {{newPassword}} back to {{password}}. Expected: 200 with a fresh session.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{newPassword}}\",\n  \"newPassword\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });",
+                  "pm.test('refresh_token cookie is cleared', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/logout",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "logout"
+              ]
+            },
+            "description": "Revokes the session of the refresh cookie and clears it. Public (cookie based). Expected: 204, always."
+          }
+        },
+        {
+          "name": "Logout all",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/logout-all",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "logout-all"
+              ]
+            },
+            "description": "Revokes every session of the user. Requires Bearer {{accessToken}} (still valid after Logout until it expires). Expected: 204."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Password reset",
+      "item": [
+        {
+          "name": "Forgot password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 202', function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/forgot-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "forgot-password"
+              ]
+            },
+            "description": "Queues a reset email for {{email}}. Always 202 (no account enumeration). The new password used by Reset password is the collection variable {{newPassword}}; change it there. Strict throttle.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get reset token from Mailpit",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The email is sent by a background queue, so it may arrive a moment after the API call.",
+                  "// Poll Mailpit (up to ~10s) for a message to {{email}} whose subject contains the keyword.",
+                  "const base = pm.collectionVariables.get('mailpitUrl');",
+                  "const query = 'to:' + pm.collectionVariables.get('email') + ' subject:reset';",
+                  "const url = base + '/api/v1/search?query=' + encodeURIComponent(query) + '&limit=1';",
+                  "let attempts = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest({ url: url, method: 'GET' }, function (err, res) {",
+                  "    const found = !err && res.json().messages && res.json().messages.length > 0;",
+                  "    if (found || attempts >= 20) { return; }",
+                  "    attempts += 1;",
+                  "    setTimeout(poll, 500);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Mailpit has a message for the test email', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.messages, 'no mail yet: wait a second (queue) and resend').to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "const messages = pm.response.json().messages || [];",
+                  "if (messages.length) {",
+                  "  pm.sendRequest({ url: pm.collectionVariables.get('mailpitUrl') + '/api/v1/message/' + messages[0].ID, method: 'GET' }, function (err, res) {",
+                  "    pm.test('Extracted reset token from the message', function () {",
+                  "      pm.expect(err).to.be.null;",
+                  "      const message = res.json();",
+                  "      const haystack = (message.Text || '') + '\\n' + (message.HTML || '');",
+                  "      const match = haystack.match(/token=([A-Za-z0-9_-]+)/);",
+                  "      pm.expect(match, 'token link not found in the email').to.not.be.null;",
+                  "      pm.collectionVariables.set('resetToken', match[1]);",
+                  "    });",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}%20subject:reset&limit=1",
+              "host": [
+                "{{mailpitUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "to:{{email}} subject:reset"
+                },
+                {
+                  "key": "limit",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Finds the newest password reset email to {{email}} in Mailpit (subject contains \"reset\"), waiting up to ~10 seconds for the background email queue to deliver it, and extracts ?token=... into the matching variable. Expected: 200."
+          }
+        },
+        {
+          "name": "Reset password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/reset-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "reset-password"
+              ]
+            },
+            "description": "Sets {{newPassword}} using {{resetToken}} (single use, revokes all sessions, marks email verified). Public. Strict throttle. Expected: 204.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Login with new password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Body has accessToken, tokenType, expiresIn and user', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json).to.have.property('accessToken').that.is.a('string').and.not.empty;",
+                  "  pm.expect(json).to.have.property('tokenType');",
+                  "  pm.expect(json).to.have.property('expiresIn');",
+                  "  pm.expect(json).to.have.property('user').that.is.an('object');",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "  if (json.user && json.user.id) { pm.collectionVariables.set('userId', json.user.id); }",
+                  "});",
+                  "pm.test('refresh_token cookie is stored in the jar', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token'), 'enable the cookie jar for localhost').to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/login",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "login"
+              ]
+            },
+            "description": "Signs in with {{newPassword}}. Expected: 200 and a fresh access token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Google OAuth",
+      "description": "Browser flow only. Callback URL: {{baseUrl}}{{apiPrefix}}/authentication/callback/google (port 3000 required). After the redirect to the frontend, the browser calls POST refresh.",
+      "item": [
+        {
+          "name": "Start Google sign-in",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Redirects (302) to Google', function () {",
+                  "  pm.response.to.have.status(302);",
+                  "  pm.expect(pm.response.headers.get('Location')).to.include('accounts.google.com');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/google",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "google"
+              ]
+            },
+            "description": "OPEN IN A BROWSER, not Postman: Postman cannot complete Google consent. Open {{baseUrl}}{{apiPrefix}}/authentication/google in a browser. The gateway answers 302 to Google. After consent, Google calls GET {{baseUrl}}{{apiPrefix}}/authentication/callback/google (this exact URL, on port 3000, must be registered as the authorised redirect URI in Google Cloud), which sets the refresh_token cookie and redirects to FRONTEND_URL/auth/callback. The browser must then call POST refresh to obtain an access token. Requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env. Sent from Postman it only shows the 302 (redirects are disabled for this request)."
+          },
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          }
+        },
+        {
+          "name": "Start linking Google (signed in)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns the Google consent URL with the registered callback and a state', function () {",
+                  "  const url = pm.response.json().url;",
+                  "  pm.expect(url).to.match(/^https:\\/\\/accounts\\.google\\.com\\/o\\/oauth2\\/v2\\/auth\\?/);",
+                  "  const query = {};",
+                  "  url.split('?')[1].split('&').forEach(function (pair) {",
+                  "    const parts = pair.split('=');",
+                  "    query[parts[0]] = decodeURIComponent(parts.slice(1).join('='));",
+                  "  });",
+                  "  pm.expect(query.redirect_uri).to.include('/api/v1/authentication/callback/google');",
+                  "  pm.expect(query.state).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/google/link",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "google",
+                "link"
+              ]
+            },
+            "description": "Returns {url}: open it in a browser to link a Google account to the signed-in user. Sets the oauth_state and oauth_link cookies. After consent the callback redirects to FRONTEND_URL/auth/callback?linked=google. A Google account already linked to another user ends in ?error=oauth_link_failed."
+          }
+        },
+        {
+          "name": "Unlink Google (404 for a password-only user)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 when nothing is linked, 204 when unlinked, 409 when it is the only sign-in method', function () {",
+                  "  pm.expect([204, 404, 409]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/google",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "google"
+              ]
+            },
+            "description": "Removes the linked Google account. For this password-only test user nothing is linked: expect 404. After linking Google in a browser, expect 204; the API answers 409 if Google is the only way to sign in."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Negative cases",
+      "description": "Run after folder 1. Failed logins count toward the strict throttle (10/min); wait a minute if you get 429.",
+      "item": [
+        {
+          "name": "Wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(401);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});",
+                  "pm.collectionVariables.set('lastLoginErrorMessage', JSON.stringify(pm.response.json().message));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/login",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "login"
+              ]
+            },
+            "description": "Valid email, wrong password. Expected: 401 with a generic message (stored for the next request).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-not-the-password\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Unknown email (401, same message)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(401);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});",
+                  "pm.test('Same message as wrong password', function () {",
+                  "  const previous = pm.collectionVariables.get('lastLoginErrorMessage');",
+                  "  if (previous) { pm.expect(JSON.stringify(pm.response.json().message)).to.eql(previous); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/login",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "login"
+              ]
+            },
+            "description": "Unknown email. Expected: 401 with the same message as Wrong password, so accounts cannot be enumerated.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody-{{$timestamp}}@test.local\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Duplicate register (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 409', function () { pm.response.to.have.status(409); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(409);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/register",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "register"
+              ]
+            },
+            "description": "Registers {{email}} again. Expected: 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Weak password (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(400);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "  pm.expect(JSON.stringify(json.message)).to.include('password');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/register",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "register"
+              ]
+            },
+            "description": "Password shorter than 10 characters. Expected: 400 validation error mentioning password.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"weak-{{$timestamp}}@test.local\",\n  \"password\": \"short\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Unknown extra field (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(400);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "  pm.expect(JSON.stringify(json.message)).to.include('isAdmin');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/register",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "register"
+              ]
+            },
+            "description": "Body has a property not in the DTO (forbidNonWhitelisted). Expected: 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"extra-{{$timestamp}}@test.local\",\n  \"password\": \"{{password}}\",\n  \"isAdmin\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Me without token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(401);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/me",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "me"
+              ]
+            },
+            "description": "No Authorization header (auth overridden to none). Expected: 401."
+          }
+        },
+        {
+          "name": "Refresh without cookie (401)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Earlier requests logged in, so the jar holds a refresh_token cookie: remove it for this call.",
+                  "// The cookie is scoped to /api/v1/authentication, so the full request URL is needed to match it.",
+                  "const url = pm.variables.replaceIn('{{baseUrl}}{{apiPrefix}}/authentication/refresh');",
+                  "pm.cookies.jar().unset(url, 'refresh_token', function () {});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(401);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/refresh",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "refresh"
+              ]
+            },
+            "description": "Sends no refresh_token cookie (the pre-request script removes it from the cookie jar first). Expected: 401."
+          }
+        },
+        {
+          "name": "Refresh token reuse detection (manual)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Manual check: 401 when a rotated cookie is replayed, 200 for a normal refresh', function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/refresh",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "refresh"
+              ]
+            },
+            "description": "MANUAL TWO-STEP. 1) Login, then open Cookies > localhost and copy the refresh_token value. 2) Send Refresh once (rotates the cookie), then edit the cookie back to the copied old value and send THIS request. The old token was already rotated, so it is treated as theft: expected 401 and every session of the user is revoked. Run on its own, with a valid cookie, it just returns 200 (a normal refresh)."
+          }
+        },
+        {
+          "name": "Invalid verify token (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Error body has statusCode and message', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.statusCode).to.eql(400);",
+                  "  pm.expect(json).to.have.property('message');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/verify-email",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "verify-email"
+              ]
+            },
+            "description": "Well-formed (20+ chars) but unknown token. Expected: 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"invalid-token-invalid-token-0123456789\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. API keys (manual, needs a workspace)",
+      "description": "Needs a workspace you own, held in the collection variable workspaceId. There is no workspace API yet, so create one for the user you registered (userId is saved by Register/Me), replacing <userId>:\n\ndocker exec -i syntra-postgres psql -U syntra -d syntra -c \"BEGIN; SELECT set_config('app.user_id', '<userId>', true); SELECT app.create_workspace('Postman', 'postman-' || floor(extract(epoch from now()))::text); COMMIT;\"\n\nThen copy the returned id into workspaceId. Requests in this folder are skipped while workspaceId is empty.",
+      "item": [
+        {
+          "name": "Create API key",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Returns the key once, plus its metadata', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.key).to.match(/^sk_[A-Za-z0-9_-]{43}$/);",
+                  "  pm.expect(json.keyPrefix).to.eql(json.key.slice(0, 11));",
+                  "  pm.expect(json.permissions).to.eql(['ai:use']);",
+                  "  pm.collectionVariables.set('apiKey', json.key);",
+                  "  pm.collectionVariables.set('apiKeyId', json.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Creates a key for {{workspaceId}} with the ai:use permission. The plaintext key is in the response ONCE and is saved to {{apiKey}}. Needs ai:manage_keys in the workspace (the owner and admins have it). Expected: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"postman key\",\n  \"permissions\": [\n    \"ai:use\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List API keys",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Never exposes a key or its hash', function () {",
+                  "  const text = pm.response.text();",
+                  "  pm.expect(text).to.not.include(pm.collectionVariables.get('apiKey') || 'no-key-yet');",
+                  "  pm.expect(text).to.not.include('keyHash');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Lists the keys of the workspace: prefix, name, permissions, creator, last use, expiry, revocation. The key itself is never returned. Expected: 200."
+          }
+        },
+        {
+          "name": "API key cannot manage keys (403)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }",
+                  "if (!pm.collectionVariables.get('apiKey')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Calls the key-management route authenticated with the API key itself. Keys can never manage keys or call authentication routes: expect 403."
+          }
+        },
+        {
+          "name": "Create API key with an unknown permission (400)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "permissions must be known codes. Expected: 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"bad\",\n  \"permissions\": [\n    \"ai:telepathy\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Revoke API key",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }",
+                  "if (!pm.collectionVariables.get('apiKeyId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "Revokes the key; it stops working on the next request. Idempotent. Expected: 204."
+          }
+        }
+      ]
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Intentionally empty: variables are set on individual requests."
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Response time is below 5s', function () { pm.expect(pm.response.responseTime).to.be.below(5000); });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "apiPrefix",
+      "value": "/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "mailpitUrl",
+      "value": "http://localhost:8025",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "Sup3r-secret-pass",
+      "type": "string"
+    },
+    {
+      "key": "newPassword",
+      "value": "N3w-secret-pass-1",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "verificationToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "resetToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastLoginErrorMessage",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "name",
+      "value": "Postman Tester",
+      "type": "string"
+    },
+    {
+      "key": "workspaceId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKeyId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

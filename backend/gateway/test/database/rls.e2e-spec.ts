@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { Client, Pool } from 'pg';
+import { PERMISSION_KEYS } from '../../src/database/schemas/workspace/permission-keys';
 
 /**
  * Integration test for tenancy + permissions. Requires a migrated database
@@ -256,6 +257,13 @@ describe('Row level security (tenancy and permissions)', () => {
         c.query(`INSERT INTO public.permissions (key, description) VALUES ('x:y', 'x')`),
       ).rejects.toThrow(/permission denied/);
     });
+  });
+
+  it('keeps the TypeScript permission keys in sync with the seeded catalog', async () => {
+    const rows = await asUser(ids.owner, (c) =>
+      c.query<{ key: string }>(`SELECT key FROM public.permissions ORDER BY key`),
+    );
+    expect(rows.rows.map((r) => r.key)).toEqual([...PERMISSION_KEYS].sort());
   });
 
   it('exposes only login fields through the pre-auth lookup', async () => {
