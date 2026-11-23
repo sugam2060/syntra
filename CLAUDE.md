@@ -2,6 +2,7 @@
 
 @backend/gateway/AGENTS.md
 @backend/workflow/AGENTS.md
+@frontend/AGENTS.md
 
 Consider agents and skills from @/.claude folder too
 
