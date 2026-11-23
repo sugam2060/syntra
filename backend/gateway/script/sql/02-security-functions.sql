@@ -348,7 +348,7 @@ AS $$
 DECLARE
   v_session record;
 BEGIN
-  SELECT s.id, s.user_id, s.revoked_at, s.expires_at
+  SELECT s.id, s.user_id, s.revoked_at, s.rotated_at, s.expires_at
   INTO v_session
   FROM public.sessions s
   WHERE s.refresh_token_hash = p_old_hash
@@ -359,11 +359,20 @@ BEGIN
     RETURN;
   END IF;
 
-  IF v_session.revoked_at IS NOT NULL THEN
+  -- A token that was already rotated can only be replayed by someone holding a stale copy:
+  -- treat it as theft and end every session of the user.
+  IF v_session.rotated_at IS NOT NULL THEN
     UPDATE public.sessions
     SET revoked_at = now()
     WHERE public.sessions.user_id = v_session.user_id AND public.sessions.revoked_at IS NULL;
     RETURN QUERY SELECT v_session.user_id, 'reuse'::text;
+    RETURN;
+  END IF;
+
+  -- Revoked for another reason (logout, logout-all, password change): just invalid. Revoking
+  -- everything here would sign out the device the user is still legitimately using.
+  IF v_session.revoked_at IS NOT NULL THEN
+    RETURN QUERY SELECT NULL::uuid, 'invalid'::text;
     RETURN;
   END IF;
 
@@ -375,7 +384,7 @@ BEGIN
     RETURN;
   END IF;
 
-  UPDATE public.sessions SET revoked_at = now() WHERE id = v_session.id;
+  UPDATE public.sessions SET revoked_at = now(), rotated_at = now() WHERE id = v_session.id;
 
   INSERT INTO public.sessions (user_id, refresh_token_hash, user_agent, ip, expires_at)
   VALUES (v_session.user_id, p_new_hash, p_user_agent, p_ip, p_expires_at);
@@ -529,5 +538,93 @@ BEGIN
   VALUES (v_user.id, 'email_verification', p_token_hash, p_expires_at);
 
   RETURN QUERY SELECT v_user.id, v_user.email, v_user.name;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- API keys (authentication happens before any user context exists)
+-- ---------------------------------------------------------------------------
+
+-- Looks a key up by the SHA-256 of the presented key. Returns no row for an unknown key; the
+-- caller decides what to do with revoked or expired keys. Touches last_used_at at most once
+-- every 5 minutes so authentication does not turn every request into a write.
+CREATE OR REPLACE FUNCTION app.auth_find_api_key(p_key_hash text)
+RETURNS TABLE (
+  api_key_id uuid,
+  workspace_id uuid,
+  created_by uuid,
+  permissions text[],
+  expires_at timestamptz,
+  revoked_at timestamptz,
+  creator_active boolean,
+  creator_email text,
+  creator_email_verified boolean
+)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_key record;
+BEGIN
+  SELECT k.id, k.workspace_id, k.created_by, k.permissions, k.expires_at, k.revoked_at,
+         k.last_used_at, u.is_active AS active, u.email AS email,
+         (u.email_verified_at IS NOT NULL) AS verified
+  INTO v_key
+  FROM public.api_keys k
+  JOIN public.users u ON u.id = k.created_by
+  WHERE k.key_hash = p_key_hash;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  IF v_key.revoked_at IS NULL
+     AND (v_key.expires_at IS NULL OR v_key.expires_at > now())
+     AND (v_key.last_used_at IS NULL OR v_key.last_used_at < now() - interval '5 minutes') THEN
+    UPDATE public.api_keys SET last_used_at = now() WHERE public.api_keys.id = v_key.id;
+  END IF;
+
+  RETURN QUERY SELECT v_key.id, v_key.workspace_id, v_key.created_by, v_key.permissions,
+                      v_key.expires_at, v_key.revoked_at, v_key.active, v_key.email, v_key.verified;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Housekeeping
+-- ---------------------------------------------------------------------------
+
+-- Deletes expired authentication data and returns how many rows of each kind were removed.
+--   * sessions: only those that EXPIRED more than a day ago. Revoked-but-unexpired sessions are
+--     kept on purpose: refresh-token reuse detection needs them until they expire.
+--   * verification tokens: expired or consumed more than 7 days ago.
+--   * API keys: revoked or expired more than 90 days ago.
+CREATE OR REPLACE FUNCTION app.auth_purge_expired()
+RETURNS TABLE (sessions_deleted bigint, tokens_deleted bigint, api_keys_deleted bigint)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_sessions bigint;
+  v_tokens bigint;
+  v_keys bigint;
+BEGIN
+  DELETE FROM public.sessions WHERE expires_at < now() - interval '1 day';
+  GET DIAGNOSTICS v_sessions = ROW_COUNT;
+
+  DELETE FROM public.verification_tokens
+  WHERE expires_at < now() - interval '7 days'
+     OR consumed_at < now() - interval '7 days';
+  GET DIAGNOSTICS v_tokens = ROW_COUNT;
+
+  DELETE FROM public.api_keys
+  WHERE revoked_at < now() - interval '90 days'
+     OR expires_at < now() - interval '90 days';
+  GET DIAGNOSTICS v_keys = ROW_COUNT;
+
+  RETURN QUERY SELECT v_sessions, v_tokens, v_keys;
 END;
 $$;

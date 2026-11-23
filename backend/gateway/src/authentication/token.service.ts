@@ -7,6 +7,8 @@ import type { AccessTokenPayload, OpaqueToken } from './types';
 
 const OPAQUE_TOKEN_BYTES = 32;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const LINK_PURPOSE = 'oauth-link';
+const LINK_INTENT_TTL_SECONDS = 10 * 60;
 
 /** Identity fields copied into the access token claims. */
 export interface AccessTokenSubject {
@@ -42,6 +44,38 @@ export class TokenService {
   generateOpaqueToken(): OpaqueToken {
     const token = randomBytes(OPAQUE_TOKEN_BYTES).toString('base64url');
     return { token, hash: this.hashToken(token) };
+  }
+
+  /**
+   * Signs a 10 minute intent saying "the next Google callback with this `state` links to this
+   * user". It carries its own audience, so it is rejected as an access token and vice versa.
+   */
+  signLinkIntent(userId: string, state: string): Promise<string> {
+    return this.jwtService.signAsync(
+      { sub: userId, purpose: LINK_PURPOSE, sh: this.hashToken(state) },
+      { audience: this.linkAudience, expiresIn: LINK_INTENT_TTL_SECONDS },
+    );
+  }
+
+  /** @returns the user id when the intent is valid and was issued for this `state`, else null. */
+  async verifyLinkIntent(intent: string, state: unknown): Promise<string | null> {
+    if (typeof state !== 'string') return null;
+    try {
+      const claims = await this.jwtService.verifyAsync<{
+        sub: string;
+        purpose: string;
+        sh: string;
+      }>(intent, { audience: this.linkAudience });
+      return claims.purpose === LINK_PURPOSE && claims.sh === this.hashToken(state)
+        ? claims.sub
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private get linkAudience(): string {
+    return `${this.config.jwt.audience}:oauth-link`;
   }
 
   hashToken(token: string): string {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, type ConfigType } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import type { StringValue } from 'ms';
 import appConfig from '../config/app.config';
 import authConfig from '../config/auth.config';
 import { EmailModule } from '../jobs/email/email.module';
@@ -28,7 +29,7 @@ import { TokenService } from './token.service';
         secret: config.jwt.accessSecret,
         signOptions: {
           algorithm: 'HS256' as const,
-          expiresIn: config.jwt.accessTtl as never,
+          expiresIn: config.jwt.accessTtl as StringValue,
           issuer: config.jwt.issuer,
           audience: config.jwt.audience,
         },

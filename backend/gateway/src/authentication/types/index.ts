@@ -1,4 +1,5 @@
 export * from './access-token-payload.type';
+export * from './auth-profile.type';
 export * from './auth-response.type';
 export * from './auth-user.type';
 export * from './oauth-profile.type';

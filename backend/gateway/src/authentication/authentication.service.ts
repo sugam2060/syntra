@@ -5,19 +5,23 @@ import {
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
+import { randomBytes } from 'node:crypto';
 import appConfig from '../config/app.config';
 import authConfig from '../config/auth.config';
 import { isUniqueViolation } from '../common/utils/postgres-error.util';
 import { EmailProducer } from '../jobs/email/email.producer';
 import { AuthenticationRepository } from './authentication.repository';
+import type { ChangePasswordDto } from './dto/change-password.dto';
 import type { LoginDto } from './dto/login.dto';
 import type { RegisterDto } from './dto/register.dto';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 import type {
+  AuthProfile,
   AuthResult,
   AuthUserSummary,
   OAuthProfile,
@@ -178,10 +182,103 @@ export class AuthenticationService {
     return this.repository.revokeAllSessions(userId);
   }
 
-  async me(userId: string): Promise<AuthUserSummary> {
+  /** The user plus how they can sign in, for account-settings screens. */
+  async me(userId: string): Promise<AuthProfile> {
     const profile = await this.repository.getUserProfile(userId);
     if (!profile) throw new UnauthorizedException(INVALID_SESSION);
-    return profile;
+    const methods = await this.repository.getSignInMethods(userId);
+    return { ...profile, hasPassword: methods.passwordHash !== null, providers: methods.providers };
+  }
+
+  /**
+   * Sets a new password and signs the user in on a fresh session; every other session is
+   * revoked. An account that has no password yet (OAuth only) may add one without a current
+   * password.
+   *
+   * @throws BadRequestException when a current password is required but missing, or the new
+   * password equals it.
+   * @throws ForbiddenException when the current password is wrong.
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+    context: RequestContext,
+  ): Promise<AuthResult> {
+    const methods = await this.repository.getSignInMethods(userId);
+
+    if (methods.passwordHash) {
+      if (!dto.currentPassword) throw new BadRequestException('currentPassword is required');
+      if (!(await this.passwords.verify(methods.passwordHash, dto.currentPassword))) {
+        throw new ForbiddenException('Current password is incorrect');
+      }
+      if (await this.passwords.verify(methods.passwordHash, dto.newPassword)) {
+        throw new BadRequestException('The new password must be different from the current one');
+      }
+    }
+
+    await this.repository.replacePassword(userId, await this.passwords.hash(dto.newPassword));
+    return this.startSessionForUser(userId, context);
+  }
+
+  /**
+   * Prepares linking a Google account to the signed-in user. The caller sets the returned
+   * `state` and `intent` as cookies and sends the browser to `url`; the Google callback then
+   * links instead of signing in.
+   */
+  async startGoogleLink(userId: string): Promise<{ url: string; state: string; intent: string }> {
+    const state = randomBytes(24).toString('base64url');
+    const intent = await this.tokens.signLinkIntent(userId, state);
+
+    const query = new URLSearchParams({
+      response_type: 'code',
+      client_id: this.auth.google.clientId,
+      redirect_uri: this.auth.google.callbackUrl,
+      scope: 'profile email',
+      state,
+      prompt: 'select_account',
+    });
+    return { url: `https://accounts.google.com/o/oauth2/v2/auth?${query.toString()}`, state, intent };
+  }
+
+  /**
+   * Finishes a link started by `startGoogleLink`.
+   *
+   * @throws UnauthorizedException when the intent is missing, expired or was issued for a
+   * different `state`.
+   * @throws ConflictException when the Google account is already linked to a user.
+   */
+  async completeGoogleLink(
+    intent: string,
+    state: unknown,
+    profile: OAuthProfile,
+  ): Promise<string> {
+    const userId = await this.tokens.verifyLinkIntent(intent, state);
+    if (!userId) throw new UnauthorizedException('The link request is invalid or has expired');
+    if (!profile.emailVerified) {
+      throw new UnauthorizedException('The provider has not verified this email address');
+    }
+
+    try {
+      await this.repository.linkOAuthAccount({ userId, profile, localEmailUnverified: false });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConflictException('This Google account is already linked to a user');
+      }
+      throw error;
+    }
+    return userId;
+  }
+
+  /**
+   * @throws NotFoundException when no Google account is linked.
+   * @throws ConflictException when it is the user's only way to sign in.
+   */
+  async unlinkGoogle(userId: string): Promise<void> {
+    const result = await this.repository.unlinkOAuthAccount(userId, 'google');
+    if (result === 'not-linked') throw new NotFoundException('No Google account is linked');
+    if (result === 'last-sign-in-method') {
+      throw new ConflictException('Set a password before unlinking your only sign-in method');
+    }
   }
 
   /** @throws BadRequestException when the token is unknown, expired or already used. */

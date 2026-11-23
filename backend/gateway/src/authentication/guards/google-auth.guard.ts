@@ -25,7 +25,10 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     }
 
     const state = randomBytes(STATE_BYTES).toString('base64url');
-    this.cookies.setOAuthState(http.getResponse<Response>(), state);
+    const response = http.getResponse<Response>();
+    // A fresh sign-in must never complete an abandoned link attempt.
+    this.cookies.clearOAuthLink(response);
+    this.cookies.setOAuthState(response, state);
     return { session: false, state, prompt: 'select_account' };
   }
 

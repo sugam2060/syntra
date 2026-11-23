@@ -7,16 +7,16 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { isUuid } from '../../common/utils/uuid.util';
-import { REQUIRED_PERMISSION_KEY } from '../decorators/required-permission.decorator';
-import { PermissionService } from '../permission.service';
-import type { PermissionRequirement, WorkspaceRequest } from '../types';
+import { isUuid } from '../utils/uuid.util';
+import { REQUIRED_PERMISSION_KEY } from '../../authorization/decorators/required-permission.decorator';
+import { PermissionService } from '../../authorization/permission.service';
+import type { PermissionRequirement, WorkspaceRequest } from '../../authorization/types';
 
 /** Message of the single 403 body, shared by every denial reason. */
 export const PERMISSION_DENIED_MESSAGE = 'You do not have permission to perform this action';
 
 /**
- * Registered globally after `JwtAuthGuard`. Does nothing unless the route (or its controller)
+ * Registered globally, last (after `ApiKeyGuard` and `JwtAuthGuard`). Does nothing unless the route (or its controller)
  * carries `@RequiredPermission(...)`; then it checks the caller against the workspace in the
  * `:workspaceId` route parameter.
  *
@@ -44,6 +44,16 @@ export class PermissionGuard implements CanActivate {
     const workspaceId: unknown = request.params?.workspaceId;
     if (!isUuid(workspaceId)) {
       throw new BadRequestException('The workspaceId route parameter must be a valid UUID');
+    }
+
+    // An API key is limited to its own workspace and permissions on top of its creator's rights.
+    const { apiKey } = request.user;
+    if (
+      apiKey &&
+      (apiKey.workspaceId !== workspaceId ||
+        !required.every((permission) => apiKey.permissions.includes(permission)))
+    ) {
+      throw new ForbiddenException(PERMISSION_DENIED_MESSAGE);
     }
 
     const allowed = await this.permissions.hasAll(request.user.userId, workspaceId, required);

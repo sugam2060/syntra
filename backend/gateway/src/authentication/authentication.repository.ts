@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { toDate } from '../common/utils/date.util';
 import { DatabaseService } from '../database/database.service';
 import {
   oauthAccounts,
@@ -10,6 +11,8 @@ import {
 } from '../database/schemas';
 import type {
   AuthUserSummary,
+  SignInMethods,
+  UnlinkResult,
   LoginLookupRow,
   OAuthAccountLookup,
   OAuthProfile,
@@ -24,7 +27,7 @@ interface LoginLookupRecord extends Record<string, unknown> {
   id: string;
   email: string;
   name: string | null;
-  email_verified_at: Date | null;
+  email_verified_at: Date | string | null;
   is_active: boolean;
   password_hash: string | null;
 }
@@ -48,7 +51,7 @@ export class AuthenticationRepository {
           id: row.id,
           email: row.email,
           name: row.name,
-          emailVerifiedAt: row.email_verified_at,
+          emailVerifiedAt: toDate(row.email_verified_at),
           isActive: row.is_active,
           passwordHash: row.password_hash,
         }
@@ -294,5 +297,68 @@ export class AuthenticationRepository {
       sql`SELECT app.auth_create_oauth_user(${profile.email}, ${profile.name}, ${profile.avatarUrl}, ${profile.provider}, ${profile.providerAccountId}) AS id`,
     );
     return rows[0].id;
+  }
+
+  /** Password hash (if any) and linked providers of a user, read in their own tenant context. */
+  async getSignInMethods(userId: string): Promise<SignInMethods> {
+    return this.database.withTenant({ userId }, async (tx) => {
+      const [credential] = await tx
+        .select({ passwordHash: userCredentials.passwordHash })
+        .from(userCredentials)
+        .where(eq(userCredentials.userId, userId));
+      const accounts = await tx
+        .select({ provider: oauthAccounts.provider })
+        .from(oauthAccounts)
+        .where(eq(oauthAccounts.userId, userId));
+      return {
+        passwordHash: credential?.passwordHash ?? null,
+        providers: accounts.map((account) => account.provider),
+      };
+    });
+  }
+
+  /** Sets the password (adding one for OAuth-only users) and revokes every session of the user. */
+  async replacePassword(userId: string, passwordHash: string): Promise<void> {
+    await this.database.withTenant({ userId }, async (tx) => {
+      await tx
+        .insert(userCredentials)
+        .values({ userId, passwordHash })
+        .onConflictDoUpdate({
+          target: userCredentials.userId,
+          set: { passwordHash, passwordUpdatedAt: new Date() },
+        });
+      await tx
+        .update(sessions)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+    });
+  }
+
+  /**
+   * Removes a linked provider, unless it is the user's only way to sign in (no password and no
+   * other provider).
+   */
+  async unlinkOAuthAccount(
+    userId: string,
+    provider: OAuthProfile['provider'],
+  ): Promise<UnlinkResult> {
+    return this.database.withTenant({ userId }, async (tx) => {
+      const [credential] = await tx
+        .select({ userId: userCredentials.userId })
+        .from(userCredentials)
+        .where(eq(userCredentials.userId, userId));
+      const accounts = await tx
+        .select({ provider: oauthAccounts.provider })
+        .from(oauthAccounts)
+        .where(eq(oauthAccounts.userId, userId));
+
+      if (!accounts.some((account) => account.provider === provider)) return 'not-linked';
+      if (!credential && accounts.length <= 1) return 'last-sign-in-method';
+
+      await tx
+        .delete(oauthAccounts)
+        .where(and(eq(oauthAccounts.userId, userId), eq(oauthAccounts.provider, provider)));
+      return 'unlinked';
+    });
   }
 }

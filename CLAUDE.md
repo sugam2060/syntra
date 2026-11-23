@@ -5,6 +5,11 @@
 
 Consider agents and skills from @/.claude folder too
 
+`Agents`:
+- software-engineer (General software engineer)
+- software-architect (Design efficient architecture)
+- code-documenter (document code in notion)
+
 ## Project Overview
 
 **AI-Powered Project Management Tool.** AI agents are usable inside the app and through a public API for third-party project management tools.

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -24,6 +25,8 @@ const app = {
   apiPrefix: 'api/v1',
   frontendUrl: 'http://localhost:3001',
   isProduction: false,
+  trustProxy: false,
+  maintenance: { authCleanupCron: '0 3 * * *' },
   throttle: { ttlMs: 60_000, limit: 120, authLimit: 10 },
 };
 const context: RequestContext = { userAgent: 'jest', ip: '127.0.0.1' };
@@ -48,6 +51,9 @@ function buildRepository(): RepositoryMock {
     findOAuthAccount: jest.fn(),
     linkOAuthAccount: jest.fn().mockResolvedValue(undefined),
     createOAuthUser: jest.fn(),
+    getSignInMethods: jest.fn(),
+    replacePassword: jest.fn().mockResolvedValue(undefined),
+    unlinkOAuthAccount: jest.fn(),
   } as RepositoryMock;
 }
 
@@ -344,6 +350,161 @@ describe('AuthenticationService', () => {
       expect(userId).toBe('user-1');
       expect(hash).toMatch(/^\$argon2id\$/);
       expect(hash).not.toContain('brand-new-password');
+    });
+  });
+
+  describe('me', () => {
+    it('adds how the user can sign in to the profile', async () => {
+      repository.getUserProfile.mockResolvedValue(profileFor('user-1'));
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: null, providers: ['google'] });
+
+      await expect(service.me('user-1')).resolves.toMatchObject({
+        id: 'user-1',
+        hasPassword: false,
+        providers: ['google'],
+      });
+    });
+
+    it('rejects an inactive or unknown user', async () => {
+      repository.getUserProfile.mockResolvedValue(null);
+      await expect(service.me('user-1')).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+  });
+
+  describe('changePassword', () => {
+    const dto = { currentPassword: 'correct-password-1', newPassword: 'a-brand-new-passphrase' };
+
+    beforeEach(() => {
+      repository.getUserProfile.mockResolvedValue(profileFor('user-1'));
+    });
+
+    it('verifies the current password, stores only a hash, and returns a fresh session', async () => {
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: storedHash, providers: [] });
+
+      const result = await service.changePassword('user-1', dto, context);
+
+      const [userId, hash] = repository.replacePassword.mock.calls[0];
+      expect(userId).toBe('user-1');
+      expect(hash).toMatch(/^\$argon2id\$/);
+      expect(hash).not.toContain('a-brand-new-passphrase');
+      // Old sessions are revoked inside replacePassword; the caller continues on a new one.
+      expect(repository.createSession).toHaveBeenCalledTimes(1);
+      expect(result.response.accessToken).toEqual(expect.any(String));
+      expect(result.refreshToken.length).toBeGreaterThanOrEqual(43);
+    });
+
+    it('rejects a wrong current password without changing anything', async () => {
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: storedHash, providers: [] });
+      await expect(
+        service.changePassword('user-1', { ...dto, currentPassword: 'wrong-password-x' }, context),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(repository.replacePassword).not.toHaveBeenCalled();
+    });
+
+    it('requires the current password when the account has one', async () => {
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: storedHash, providers: [] });
+      await expect(
+        service.changePassword('user-1', { newPassword: dto.newPassword }, context),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(repository.replacePassword).not.toHaveBeenCalled();
+    });
+
+    it('refuses to reuse the current password', async () => {
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: storedHash, providers: [] });
+      await expect(
+        service.changePassword(
+          'user-1',
+          { currentPassword: 'correct-password-1', newPassword: 'correct-password-1' },
+          context,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('lets an OAuth-only user add a first password without a current one', async () => {
+      repository.getSignInMethods.mockResolvedValue({ passwordHash: null, providers: ['google'] });
+
+      await expect(
+        service.changePassword('user-1', { newPassword: dto.newPassword }, context),
+      ).resolves.toBeDefined();
+      expect(repository.replacePassword).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('linking Google to a signed-in user', () => {
+    const profile = (): OAuthProfile => ({
+      provider: 'google',
+      providerAccountId: 'g-999',
+      email: 'ada@example.com',
+      emailVerified: true,
+      name: 'Ada',
+      avatarUrl: null,
+    });
+
+    it('builds the Google URL with the registered callback and a state bound to the intent', async () => {
+      const { url, state, intent } = await service.startGoogleLink('user-1');
+
+      const parsed = new URL(url);
+      expect(parsed.origin + parsed.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+      expect(parsed.searchParams.get('redirect_uri')).toBe(auth.google.callbackUrl);
+      expect(parsed.searchParams.get('client_id')).toBe(auth.google.clientId);
+      expect(parsed.searchParams.get('state')).toBe(state);
+      expect(parsed.searchParams.get('scope')).toBe('profile email');
+      await expect(tokens.verifyLinkIntent(intent, state)).resolves.toBe('user-1');
+    });
+
+    it('links the Google account to the user named in the intent', async () => {
+      const { state, intent } = await service.startGoogleLink('user-1');
+
+      await expect(service.completeGoogleLink(intent, state, profile())).resolves.toBe('user-1');
+
+      expect(repository.linkOAuthAccount).toHaveBeenCalledWith({
+        userId: 'user-1',
+        profile: profile(),
+        localEmailUnverified: false,
+      });
+    });
+
+    it('rejects an intent issued for a different state', async () => {
+      const { intent } = await service.startGoogleLink('user-1');
+      await expect(
+        service.completeGoogleLink(intent, 'another-state', profile()),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(repository.linkOAuthAccount).not.toHaveBeenCalled();
+    });
+
+    it('rejects a garbage or access-token intent', async () => {
+      const { token } = await tokens.signAccessToken({ id: 'user-1', email: 'a@b.co', emailVerified: true });
+      for (const intent of ['garbage', token]) {
+        await expect(
+          service.completeGoogleLink(intent, 'state', profile()),
+        ).rejects.toBeInstanceOf(UnauthorizedException);
+      }
+    });
+
+    it('reports a Google account that already belongs to another user as a conflict', async () => {
+      repository.linkOAuthAccount.mockRejectedValue({ code: '23505' });
+      const { state, intent } = await service.startGoogleLink('user-1');
+      await expect(service.completeGoogleLink(intent, state, profile())).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+  });
+
+  describe('unlinkGoogle', () => {
+    it('unlinks when another way to sign in remains', async () => {
+      repository.unlinkOAuthAccount.mockResolvedValue('unlinked');
+      await expect(service.unlinkGoogle('user-1')).resolves.toBeUndefined();
+      expect(repository.unlinkOAuthAccount).toHaveBeenCalledWith('user-1', 'google');
+    });
+
+    it('answers 404 when nothing is linked', async () => {
+      repository.unlinkOAuthAccount.mockResolvedValue('not-linked');
+      await expect(service.unlinkGoogle('user-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('answers 409 when it is the only sign-in method', async () => {
+      repository.unlinkOAuthAccount.mockResolvedValue('last-sign-in-method');
+      await expect(service.unlinkGoogle('user-1')).rejects.toBeInstanceOf(ConflictException);
     });
   });
 

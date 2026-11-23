@@ -60,4 +60,31 @@ describe('TokenService', () => {
     const from = new Date('2026-01-01T00:00:00.000Z');
     expect(service.refreshTokenExpiry(from).toISOString()).toBe('2026-01-31T00:00:00.000Z');
   });
+
+  describe('link intents', () => {
+    it('round-trips for the state it was issued with', async () => {
+      const intent = await service.signLinkIntent('user-1', 'state-a');
+      await expect(service.verifyLinkIntent(intent, 'state-a')).resolves.toBe('user-1');
+    });
+
+    it('is bound to its state', async () => {
+      const intent = await service.signLinkIntent('user-1', 'state-a');
+      await expect(service.verifyLinkIntent(intent, 'state-b')).resolves.toBeNull();
+      await expect(service.verifyLinkIntent(intent, undefined)).resolves.toBeNull();
+    });
+
+    it('is not an access token, and an access token is not a link intent', async () => {
+      const intent = await service.signLinkIntent('user-1', 'state-a');
+      await expect(
+        jwtService.verifyAsync(intent, { audience: config.jwt.audience }),
+      ).rejects.toBeDefined();
+
+      const { token } = await service.signAccessToken({ id: 'user-1', email: 'a@b.co', emailVerified: true });
+      await expect(service.verifyLinkIntent(token, 'state-a')).resolves.toBeNull();
+    });
+
+    it('rejects garbage', async () => {
+      await expect(service.verifyLinkIntent('not.a.jwt', 'state-a')).resolves.toBeNull();
+    });
+  });
 });

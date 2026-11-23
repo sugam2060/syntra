@@ -12,7 +12,7 @@ Import from `src/authorization` (barrel `index.ts`).
 | `PermissionKey`, `PERMISSION_KEYS` | Union type and array derived from `Permission` |
 | `@RequiredPermission(...codes)` | Method or controller decorator. Several codes mean all are required. A method-level decorator overrides the controller-level one (no merging) |
 | `@WorkspaceId()` | Parameter decorator. Returns the workspace id the guard validated (`request.workspaceId`) |
-| `PermissionGuard` | Global guard, registered in `AppModule` |
+| `PermissionGuard` | Global guard, registered in `AppModule`. Lives in `src/common/guards/permission.guard.ts` and is re-exported from this barrel; `AuthorizationModule` no longer provides it |
 | `PermissionService.hasAll(userId, workspaceId, codes)` | Programmatic check. One query through `app.has_permission`. `false` for a non-member, unknown workspace or unknown code; `true` for an empty list |
 | `PERMISSION_DENIED_MESSAGE` | Message of the 403 body |
 
@@ -37,11 +37,12 @@ The route must contain a `:workspaceId` parameter. The guard reads it from `requ
 
 ## Guard order
 
-`AppModule` registers three global guards in this order:
+`AppModule` registers four global guards in this order:
 
 1. `ThrottlerGuard`: rejects floods before any work.
-2. `JwtAuthGuard`: validates the access token and sets `request.user` (skipped by `@Public()`).
-3. `PermissionGuard`: reads the user set in step 2, so it must stay after `JwtAuthGuard`.
+2. `ApiKeyGuard`: authenticates `Authorization: Bearer sk_...` and sets `request.user` with an `apiKey` (see `src/api-keys/README.md`). Ignores other tokens and `@Public()` routes; `@NoApiKey()` routes answer `403`.
+3. `JwtAuthGuard`: validates the access token and sets `request.user` (skipped by `@Public()` and for requests already authenticated by an API key).
+4. `PermissionGuard`: reads the user set in step 2 or 3, so it must stay last.
 
 ## Guard behaviour
 
@@ -51,9 +52,15 @@ The route must contain a `:workspaceId` parameter. The guard reads it from `requ
 | No authenticated user (including a `@Public()` route that also has `@RequiredPermission`) | `401` |
 | `:workspaceId` missing or not a UUID | `400` `The workspaceId route parameter must be a valid UUID` |
 | User is not a member, lacks a code, or the workspace does not exist | `403`, identical body for all three: `{ "statusCode": 403, "error": "Forbidden", "message": "You do not have permission to perform this action" }` |
+| Caller is an API key and its workspace differs from `:workspaceId`, or the key's stored permissions do not include every required code | `403`, same body |
 | Allowed | Handler runs, `request.workspaceId` is set |
 
-The three 403 causes share one body so the API does not reveal which workspaces exist.
+All 403 causes share one body so the API does not reveal which workspaces exist.
+
+API-key rules:
+
+- A key acts for its creator (`request.user.userId`). The guard first checks the key's own limits (one workspace, a fixed permission list), then runs the normal check below for the creator. A key therefore never exceeds what its creator holds right now; if the creator loses a permission, the key loses it on the next request.
+- A key is limited only on routes that carry `@RequiredPermission`. Routes that must never accept a key use `@NoApiKey()` (`src/common/decorators/no-api-key.decorator.ts`); the authentication controller and the key-management controller are marked this way.
 
 Permission rules (from `app.has_permission`):
 
@@ -64,6 +71,8 @@ Permission rules (from `app.has_permission`):
 ## Caveat: the check is opt-in
 
 A route without `@RequiredPermission` is not permission-checked. Every future workspace-scoped route must carry the decorator, otherwise any signed-in user can call it for any workspace. Row level security still limits what `withTenant` queries return, but do not rely on it as the only check.
+
+`RouteAuditService` (`src/common/route-audit`) backs this up: at startup it logs one warning for each route whose path contains `:workspaceId` and that has neither `@RequiredPermission` nor `@Public()` (method or controller level). It only warns; it does not block startup or requests. `test/common/route-audit.e2e-spec.ts` fails when the real application has such a route.
 
 ## Add a permission
 
@@ -77,5 +86,5 @@ The Drizzle row type for the `permissions` table is `PermissionRecord` (not `Per
 
 ## Tests
 
-- Unit: `src/authorization/test/` (`npm test`): decorators, constant, guard, service.
+- Unit: `src/authorization/test/` (`npm test`): decorators, constant, service. The guard spec is `src/common/test/permission.guard.spec.ts`; the route audit spec is `src/common/test/route-audit.util.spec.ts`.
 - Integration and HTTP: `test/authorization/` (`npm run test:e2e`; needs the containers up and `npm run db:migrate` applied). `permission-service.e2e-spec.ts` checks owner, roles and overrides against the real database. `permission-guard.e2e-spec.ts` mounts a test-only `ProbeController` under `/workspaces/:workspaceId/probe`, because the app has no workspace-scoped controller yet.

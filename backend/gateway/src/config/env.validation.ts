@@ -30,6 +30,18 @@ export class EnvironmentVariables {
   @IsUrl(URL_OPTIONS)
   FRONTEND_URL: string = 'http://localhost:3001';
 
+  /** `false` (default), `true`, or the number of proxy hops in front of the app, e.g. `1`. */
+  @Matches(/^(true|false|\d+)$/, {
+    message: 'TRUST_PROXY must be true, false or a hop count such as 1',
+  })
+  TRUST_PROXY: string = 'false';
+
+  /** Five-field cron pattern for the nightly purge of expired sessions, tokens and keys. */
+  @Matches(/^(\S+\s+){4}\S+$/, {
+    message: 'AUTH_CLEANUP_CRON must be a five-field cron pattern',
+  })
+  AUTH_CLEANUP_CRON: string = '0 3 * * *';
+
   @IsInt()
   @Min(1)
   THROTTLE_TTL_MS: number = 60_000;
@@ -96,6 +108,11 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(65535)
   REDIS_PORT: number = 6379;
+
+  @IsInt()
+  @Min(0)
+  @Max(15)
+  REDIS_DB: number = 0;
 
   // --- Authentication ------------------------------------------------------
   @IsString()

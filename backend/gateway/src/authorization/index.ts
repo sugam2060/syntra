@@ -1,7 +1,7 @@
 export * from './authorization.module';
 export * from './decorators/required-permission.decorator';
 export * from './decorators/workspace-id.decorator';
-export * from './guards/permission.guard';
+export * from '../common/guards/permission.guard';
 export * from './permission.service';
 export * from './types';
 export {

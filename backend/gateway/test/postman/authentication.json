@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c1d6a0e4-5b7a-4f0e-9a52-7a3d2f6b8e01",
     "name": "Syntra Gateway - Authentication",
-    "description": "Manual tests for the Syntra gateway authentication API (`/api/v1/authentication`).\n\n## Setup\n1. From the repo root: `docker compose up -d postgres redis mailpit`\n2. From `backend/gateway`: `npm run db:migrate`, then `npm run start:dev`\n3. Keep the gateway on port 3000 (required for the Google OAuth callback).\n4. Mailpit UI: http://localhost:8025 (verification and reset emails are delivered there through a queue; allow a second).\n\n## Running\n- Run the folders in order (1 to 6) or use the Collection Runner. Register creates an INACTIVE account and does not sign you in. Verify the email (folder 2) to activate it, then run Login (folder 3) to start a session. Set the collection variables `email`, `password` and `name` to the account you want (Collection > Variables, current value). Nothing in the collection overwrites them; only an empty `email` is filled with a throwaway address on the first Register.\n- The refresh token is an httpOnly cookie named `refresh_token` (path `/api/v1/authentication`). Enable the cookie jar for localhost (Settings > Cookies); do not set a Cookie header manually.\n- Protected requests use Bearer `{{accessToken}}`, saved automatically by Register, Login and Refresh. Public requests override auth to No Auth.\n- Google sign-in must be done in a browser (see folder 4).\n\n## Rate limiting\nlogin, register, forgot-password, reset-password and resend-verification have a strict throttle: 10 requests per minute by default (`AUTH_THROTTLE_LIMIT`, `THROTTLE_TTL_MS`). Exceeding it returns 429; wait a minute.\n\n## Your own account\nSet `email`, `password` and `name`, then run Register once (or Login if the account exists; a second Register returns 409). Reset password uses `newPassword`. Verification and reset emails are delivered to the local Mailpit inbox (`mailpitUrl`), never to a real mailbox.",
+    "description": "Manual tests for the Syntra gateway authentication API (`/api/v1/authentication`).\n\n## Setup\n1. From the repo root: `docker compose up -d postgres redis mailpit`\n2. From `backend/gateway`: `npm run db:migrate`, then `npm run start:dev`\n3. Keep the gateway on port 3000 (required for the Google OAuth callback).\n4. Mailpit UI: http://localhost:8025 (verification and reset emails are delivered there through a queue; allow a second).\n\n## Running\n- Run folders 1 to 6 in order (folder 7 is manual) or use the Collection Runner. Register creates an INACTIVE account and does not sign you in. Verify the email (folder 2) to activate it, then run Login (folder 3) to start a session. Set the collection variables `email`, `password` and `name` to the account you want (Collection > Variables, current value). Nothing in the collection overwrites them; only an empty `email` is filled with a throwaway address on the first Register.\n- The refresh token is an httpOnly cookie named `refresh_token` (path `/api/v1/authentication`). Enable the cookie jar for localhost (Settings > Cookies); do not set a Cookie header manually.\n- Protected requests use Bearer `{{accessToken}}`, saved automatically by Register, Login and Refresh. Public requests override auth to No Auth.\n- Google sign-in must be done in a browser (see folder 5).\n\n## Rate limiting\nlogin, register, forgot-password, reset-password and resend-verification have a strict throttle: 10 requests per minute by default (`AUTH_THROTTLE_LIMIT`, `THROTTLE_TTL_MS`). Exceeding it returns 429; wait a minute.\n\n## Your own account\nSet `email`, `password` and `name`, then run Register once (or Login if the account exists; a second Register returns 409). Reset password uses `newPassword`. Verification and reset emails are delivered to the local Mailpit inbox (`mailpitUrl`), never to a real mailbox.\n\nFolder 7 (API keys) is manual: it needs a workspace you own (see its description) and is skipped while workspaceId is empty.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -143,6 +143,29 @@
           "name": "Get verification token from Mailpit",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The email is sent by a background queue, so it may arrive a moment after the API call.",
+                  "// Poll Mailpit (up to ~10s) for a message to {{email}} whose subject contains the keyword.",
+                  "const base = pm.collectionVariables.get('mailpitUrl');",
+                  "const query = 'to:' + pm.collectionVariables.get('email') + ' subject:verify';",
+                  "const url = base + '/api/v1/search?query=' + encodeURIComponent(query) + '&limit=1';",
+                  "let attempts = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest({ url: url, method: 'GET' }, function (err, res) {",
+                  "    const found = !err && res.json().messages && res.json().messages.length > 0;",
+                  "    if (found || attempts >= 20) { return; }",
+                  "    attempts += 1;",
+                  "    setTimeout(poll, 500);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -176,7 +199,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}&limit=1",
+              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}%20subject:verify&limit=1",
               "host": [
                 "{{mailpitUrl}}"
               ],
@@ -188,7 +211,7 @@
               "query": [
                 {
                   "key": "query",
-                  "value": "to:{{email}}"
+                  "value": "to:{{email}} subject:verify"
                 },
                 {
                   "key": "limit",
@@ -196,7 +219,7 @@
                 }
               ]
             },
-            "description": "Searches Mailpit for the latest message to {{email}}, reads the message and extracts ?token=... into {{verificationToken}}. The email is sent through a queue, so wait a second after Register. Expected: 200."
+            "description": "Finds the newest verification email to {{email}} in Mailpit (subject contains \"verify\"), waiting up to ~10 seconds for the background email queue to deliver it, and extracts ?token=... into the matching variable. Expected: 200."
           }
         },
         {
@@ -408,10 +431,12 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
-                  "pm.test('Returns the registered user', function () {",
+                  "pm.test('Returns the registered user and how they can sign in', function () {",
                   "  const json = pm.response.json();",
                   "  pm.expect(json).to.have.property('id');",
                   "  pm.expect(json.email).to.eql(pm.collectionVariables.get('email'));",
+                  "  pm.expect(json.hasPassword).to.be.a('boolean');",
+                  "  pm.expect(json.providers).to.be.an('array');",
                   "  pm.collectionVariables.set('userId', json.id);",
                   "});"
                 ]
@@ -441,7 +466,129 @@
                 "me"
               ]
             },
-            "description": "Returns the current user. Requires Bearer {{accessToken}}. Expected: 200."
+            "description": "Returns the current user, whether they have a password (hasPassword) and their linked social accounts (providers). Requires Bearer {{accessToken}}. Expected: 200."
+          }
+        },
+        {
+          "name": "Change password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns a fresh session', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "});",
+                  "pm.test('A new refresh_token cookie is stored', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/change-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "change-password"
+              ]
+            },
+            "description": "Changes the password from {{password}} to {{newPassword}}. All other sessions are revoked and this call returns a fresh session (new accessToken and refresh_token cookie). Strict throttle. Run \"Change password back\" right after so {{password}} keeps working for the rest of the collection.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{password}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Change password back",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns a fresh session', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "});",
+                  "pm.test('A new refresh_token cookie is stored', function () {",
+                  "  pm.expect(pm.cookies.has('refresh_token')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/change-password",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "change-password"
+              ]
+            },
+            "description": "Restores the original password: changes {{newPassword}} back to {{password}}. Expected: 200 with a fresh session.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{newPassword}}\",\n  \"newPassword\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           }
         },
         {
@@ -573,6 +720,29 @@
           "name": "Get reset token from Mailpit",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The email is sent by a background queue, so it may arrive a moment after the API call.",
+                  "// Poll Mailpit (up to ~10s) for a message to {{email}} whose subject contains the keyword.",
+                  "const base = pm.collectionVariables.get('mailpitUrl');",
+                  "const query = 'to:' + pm.collectionVariables.get('email') + ' subject:reset';",
+                  "const url = base + '/api/v1/search?query=' + encodeURIComponent(query) + '&limit=1';",
+                  "let attempts = 0;",
+                  "function poll() {",
+                  "  pm.sendRequest({ url: url, method: 'GET' }, function (err, res) {",
+                  "    const found = !err && res.json().messages && res.json().messages.length > 0;",
+                  "    if (found || attempts >= 20) { return; }",
+                  "    attempts += 1;",
+                  "    setTimeout(poll, 500);",
+                  "  });",
+                  "}",
+                  "poll();"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -606,7 +776,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}&limit=1",
+              "raw": "{{mailpitUrl}}/api/v1/search?query=to:{{email}}%20subject:reset&limit=1",
               "host": [
                 "{{mailpitUrl}}"
               ],
@@ -618,7 +788,7 @@
               "query": [
                 {
                   "key": "query",
-                  "value": "to:{{email}}"
+                  "value": "to:{{email}} subject:reset"
                 },
                 {
                   "key": "limit",
@@ -626,7 +796,7 @@
                 }
               ]
             },
-            "description": "Latest message to {{email}} (the reset email); extracts ?token=... into {{resetToken}}. Wait a second after Forgot password for the queue. Expected: 200."
+            "description": "Finds the newest password reset email to {{email}} in Mailpit (subject contains \"reset\"), waiting up to ~10 seconds for the background email queue to deliver it, and extracts ?token=... into the matching variable. Expected: 200."
           }
         },
         {
@@ -775,6 +945,98 @@
           },
           "protocolProfileBehavior": {
             "followRedirects": false
+          }
+        },
+        {
+          "name": "Start linking Google (signed in)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Returns the Google consent URL with the registered callback and a state', function () {",
+                  "  const url = pm.response.json().url;",
+                  "  pm.expect(url).to.match(/^https:\\/\\/accounts\\.google\\.com\\/o\\/oauth2\\/v2\\/auth\\?/);",
+                  "  const query = {};",
+                  "  url.split('?')[1].split('&').forEach(function (pair) {",
+                  "    const parts = pair.split('=');",
+                  "    query[parts[0]] = decodeURIComponent(parts.slice(1).join('='));",
+                  "  });",
+                  "  pm.expect(query.redirect_uri).to.include('/api/v1/authentication/callback/google');",
+                  "  pm.expect(query.state).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/google/link",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "google",
+                "link"
+              ]
+            },
+            "description": "Returns {url}: open it in a browser to link a Google account to the signed-in user. Sets the oauth_state and oauth_link cookies. After consent the callback redirects to FRONTEND_URL/auth/callback?linked=google. A Google account already linked to another user ends in ?error=oauth_link_failed."
+          }
+        },
+        {
+          "name": "Unlink Google (404 for a password-only user)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 when nothing is linked, 204 when unlinked, 409 when it is the only sign-in method', function () {",
+                  "  pm.expect([204, 404, 409]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/authentication/google",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "authentication",
+                "google"
+              ]
+            },
+            "description": "Removes the linked Google account. For this password-only test user nothing is linked: expect 404. After linking Google in a browser, expect 204; the API answers 409 if Google is the only way to sign in."
           }
         }
       ]
@@ -1086,6 +1348,18 @@
           "name": "Refresh without cookie (401)",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Earlier requests logged in, so the jar holds a refresh_token cookie: remove it for this call.",
+                  "// The cookie is scoped to /api/v1/authentication, so the full request URL is needed to match it.",
+                  "const url = pm.variables.replaceIn('{{baseUrl}}{{apiPrefix}}/authentication/refresh');",
+                  "pm.cookies.jar().unset(url, 'refresh_token', function () {});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1116,7 +1390,7 @@
                 "refresh"
               ]
             },
-            "description": "Sends no refresh_token cookie. Clear the localhost cookies in Postman (Cookies > localhost) first, or run it right after Logout. Expected: 401."
+            "description": "Sends no refresh_token cookie (the pre-request script removes it from the cookie jar first). Expected: 401."
           }
         },
         {
@@ -1202,6 +1476,306 @@
                 }
               }
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. API keys (manual, needs a workspace)",
+      "description": "Needs a workspace you own, held in the collection variable workspaceId. There is no workspace API yet, so create one for the user you registered (userId is saved by Register/Me), replacing <userId>:\n\ndocker exec -i syntra-postgres psql -U syntra -d syntra -c \"BEGIN; SELECT set_config('app.user_id', '<userId>', true); SELECT app.create_workspace('Postman', 'postman-' || floor(extract(epoch from now()))::text); COMMIT;\"\n\nThen copy the returned id into workspaceId. Requests in this folder are skipped while workspaceId is empty.",
+      "item": [
+        {
+          "name": "Create API key",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Returns the key once, plus its metadata', function () {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.key).to.match(/^sk_[A-Za-z0-9_-]{43}$/);",
+                  "  pm.expect(json.keyPrefix).to.eql(json.key.slice(0, 11));",
+                  "  pm.expect(json.permissions).to.eql(['ai:use']);",
+                  "  pm.collectionVariables.set('apiKey', json.key);",
+                  "  pm.collectionVariables.set('apiKeyId', json.id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Creates a key for {{workspaceId}} with the ai:use permission. The plaintext key is in the response ONCE and is saved to {{apiKey}}. Needs ai:manage_keys in the workspace (the owner and admins have it). Expected: 201.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"postman key\",\n  \"permissions\": [\n    \"ai:use\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List API keys",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Never exposes a key or its hash', function () {",
+                  "  const text = pm.response.text();",
+                  "  pm.expect(text).to.not.include(pm.collectionVariables.get('apiKey') || 'no-key-yet');",
+                  "  pm.expect(text).to.not.include('keyHash');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Lists the keys of the workspace: prefix, name, permissions, creator, last use, expiry, revocation. The key itself is never returned. Expected: 200."
+          }
+        },
+        {
+          "name": "API key cannot manage keys (403)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }",
+                  "if (!pm.collectionVariables.get('apiKey')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "Calls the key-management route authenticated with the API key itself. Keys can never manage keys or call authentication routes: expect 403."
+          }
+        },
+        {
+          "name": "Create API key with an unknown permission (400)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys"
+              ]
+            },
+            "description": "permissions must be known codes. Expected: 400.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"bad\",\n  \"permissions\": [\n    \"ai:telepathy\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Revoke API key",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Needs a workspace you own; there is no workspace API yet (see the folder description).",
+                  "if (!pm.collectionVariables.get('workspaceId')) { pm.execution.skipRequest(); }",
+                  "if (!pm.collectionVariables.get('apiKeyId')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}{{apiPrefix}}/workspaces/{{workspaceId}}/api-keys/{{apiKeyId}}",
+              "host": [
+                "{{baseUrl}}{{apiPrefix}}"
+              ],
+              "path": [
+                "workspaces",
+                "{{workspaceId}}",
+                "api-keys",
+                "{{apiKeyId}}"
+              ]
+            },
+            "description": "Revokes the key; it stops working on the next request. Idempotent. Expected: 204."
           }
         }
       ]
@@ -1296,6 +1870,21 @@
     {
       "key": "name",
       "value": "Postman Tester",
+      "type": "string"
+    },
+    {
+      "key": "workspaceId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "apiKeyId",
+      "value": "",
       "type": "string"
     }
   ]

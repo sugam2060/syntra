@@ -92,6 +92,20 @@ describe('Authentication SQL functions', () => {
       expect(await sessionState(`${runId}-r3`)).toBeUndefined();
     });
 
+    it('treats a token revoked by logout or password change as invalid, not as theft', async () => {
+      const userId = await createUser('stale');
+      await insertSession(userId, `${runId}-stale-old`);
+      await insertSession(userId, `${runId}-stale-live`);
+      await app.query(`SELECT app.auth_revoke_session($1)`, [`${runId}-stale-old`]);
+
+      const result = await rotate(`${runId}-stale-old`, `${runId}-stale-new`);
+
+      expect(result).toEqual({ user_id: null, status: 'invalid' });
+      // The device the user is still using must not be signed out by a stale token.
+      expect((await sessionState(`${runId}-stale-live`)).revoked).toBe(false);
+      expect(await sessionState(`${runId}-stale-new`)).toBeUndefined();
+    });
+
     it('does not touch other users when one user is compromised', async () => {
       const a = await createUser('victim');
       const b = await createUser('bystander');

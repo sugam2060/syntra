@@ -9,6 +9,10 @@ import appConfig from './config/app.config';
 export function configureApp(app: INestApplication): void {
   const config = app.get<ConfigType<typeof appConfig>>(appConfig.KEY);
 
+  // Behind a load balancer, trust its X-Forwarded-For so rate limits and stored session IPs use
+  // the real client address (never enable this when the app is directly reachable).
+  app.getHttpAdapter().getInstance().set('trust proxy', config.trustProxy);
+
   app.setGlobalPrefix(config.apiPrefix);
   app.use(helmet());
   app.use(cookieParser());

@@ -1,9 +1,14 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
+import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import type { AuthenticatedUser } from '../types';
 
-/** Registered globally; routes opt out with `@Public()`. */
+/**
+ * Registered globally; routes opt out with `@Public()`. Requests that `ApiKeyGuard` already
+ * authenticated (it runs first) are let through; everything else needs a valid Bearer JWT.
+ */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(private readonly reflector: Reflector) {
@@ -15,6 +20,11 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       context.getHandler(),
       context.getClass(),
     ]);
-    return isPublic ? true : super.canActivate(context);
+    if (isPublic) return true;
+
+    const request = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
+    if (request.user?.apiKey) return true;
+
+    return super.canActivate(context);
   }
 }

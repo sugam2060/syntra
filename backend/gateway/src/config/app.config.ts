@@ -1,4 +1,5 @@
 import { registerAs } from '@nestjs/config';
+import { parseTrustProxy } from './trust-proxy';
 import type { AppConfig } from './types';
 
 export const APP_CONFIG_KEY = 'app';
@@ -17,6 +18,10 @@ export default registerAs(
       '',
     ),
     isProduction: process.env.NODE_ENV === 'production',
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    maintenance: {
+      authCleanupCron: process.env.AUTH_CLEANUP_CRON ?? '0 3 * * *',
+    },
     throttle: {
       ttlMs: Number(process.env.THROTTLE_TTL_MS ?? 60_000),
       limit: Number(process.env.THROTTLE_LIMIT ?? 120),

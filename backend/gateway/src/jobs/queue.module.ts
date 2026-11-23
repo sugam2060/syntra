@@ -12,7 +12,7 @@ import redisConfig from '../config/redis.config';
       imports: [ConfigModule.forFeature(redisConfig)],
       inject: [redisConfig.KEY],
       useFactory: (config: ConfigType<typeof redisConfig>) => ({
-        connection: { host: config.host, port: config.port },
+        connection: { host: config.host, port: config.port, db: config.db },
         defaultJobOptions: {
           attempts: 5,
           backoff: { type: 'exponential', delay: 2_000 },
