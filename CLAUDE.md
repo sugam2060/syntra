@@ -4,12 +4,15 @@
 @backend/workflow/AGENTS.md
 @frontend/AGENTS.md
 
-Consider agents and skills from @/.claude folder too
+Consider agents and skills from the `.claude/` folder too.
 
-`Agents`:
+`Agents` (`.claude/agents/`):
 - software-engineer (General software engineer)
 - software-architect (Design efficient architecture)
-- code-documenter (document code in notion)
+- code-documenter (document code in Notion)
+
+`Skills`:
+- Next.js skills are installed in `.agents/skills/` (`next-dev-loop`, `next-bundle-optimizer`, `next-cache-components-*`, `next-partial-prefetching-*`). Load the relevant one before changing frontend routing, caching or rendering code.
 
 ## Project Overview
 
@@ -20,10 +23,12 @@ Consider agents and skills from @/.claude folder too
 ```
 /
 ├── frontend/            # Next.js application
+│   └── design/          # Stitch design prompts (00-design-system.md is the master)
 ├── backend/
 │   ├── gateway/         # NestJS: API, auth, projects, tasks, background jobs
 │   └── workflow/        # Python: FastAPI + LangGraph + LangChain (AI agents)
-├── .claude/agents/      # Subagents (code-documenter)
+├── .claude/agents/      # Subagents (software-engineer, software-architect, code-documenter)
+├── .agents/skills/      # Installed Next.js skills
 ├── docker-compose.yml
 └── CLAUDE.md
 ```
@@ -32,7 +37,7 @@ Consider agents and skills from @/.claude folder too
 
 | Layer         | Technology                               |
 |---------------|------------------------------------------|
-| Frontend      | Next.js + TypeScript + Tailwind CSS      |
+| Frontend      | Next.js + TypeScript + Tailwind + shadcn/ui + TanStack Query/Form + Zod |
 | Main backend  | NestJS + TypeScript + Drizzle            |
 | AI service    | Python + FastAPI + LangGraph + LangChain |
 | Database      | PostgreSQL                               |
@@ -52,9 +57,11 @@ Consider agents and skills from @/.claude folder too
    - **BullMQ** (event-driven) for async and long-running AI tasks.
    - **HTTP** for real-time interactions (e.g. AI chat).
    - Typed DTOs on the gateway side and Pydantic schemas on the workflow side must stay in sync.
+   - The frontend talks only to the gateway (`/api/v1`), never to the workflow service. Frontend Zod schemas mirror the gateway DTOs.
 4. **Workflow**
    - For non-trivial features, follow Plan → Implement → Review (Superpowers skills).
-   - Use Context7 for current docs on NestJS, LangGraph, LangChain, Drizzle, etc.
+   - Use Context7 for current docs on NestJS, LangGraph, LangChain, Drizzle, TanStack, shadcn, etc.
+   - For frontend UI work, follow `frontend/design/00-design-system.md` and the matching page prompt in `frontend/design/`.
 5. **Code quality**: clean, modular, production-ready; clear names over clever ones; comment only when necessary; design for scalability and separation of concerns.
 6. **Documentation (mandatory)**
    - After completing a feature, refactor, endpoint, schema, queue/event, or config change, delegate to the `code-documenter` agent before committing. Do not skip this for "small" changes that alter behavior or interfaces.
@@ -75,8 +82,8 @@ cd backend/gateway && npm run start:dev
 # AI orchestration (uv only, never pip)
 cd backend/workflow && uv run uvicorn app.main:app --reload --port 8000
 
-# Frontend
-cd frontend && npm run dev
+# Frontend (port 3001; the gateway uses 3000)
+cd frontend && npm run dev -- -p 3001
 ```
 
 ## Architecture Notes

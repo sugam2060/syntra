@@ -6,7 +6,7 @@ Follow `00-design-system.md`. Paste its Stitch preamble first.
 
 ## Behavior notes
 
-- Fields: name (optional, max 100), email (max 254, trimmed, lowercased), password (10–128 chars).
+- Fields: name (required, max 100), email (max 254, trimmed, lowercased), password (10–128 chars).
 - Register does **not** sign the user in. The account is inactive until the email link is clicked, so success shows a "Check your email" state with the address and a resend action.
 - Duplicate email: 409 → inline error on Email: "An account with this email already exists." with a "Sign in instead" link.
 - Strict rate limit (429) as on sign in.
@@ -24,7 +24,7 @@ Frame A — Create account form:
 2. H1 "Create your account", muted line "Free for teams up to 15 people".
 3. Secondary button "Sign up with Google".
 4. "or" divider.
-5. Field "Full name" (optional, helper "Optional").
+5. Field "Full name" (required, no "Optional" tag).
 6. Field "Work email".
 7. Field "Password" with eye toggle, a 4-segment strength meter below it, and a checklist helper: "At least 10 characters" (check icon turns green when met).
 8. Primary full-width button "Create account".

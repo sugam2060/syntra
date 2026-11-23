@@ -1,6 +1,6 @@
 # 04 — Forgot and reset password
 
-Routes `/forgot-password`, `/reset-password?token=…` · Backend ✅ `POST forgot-password` (202 always), `POST reset-password` (204; 400 bad token)
+Forgot password is a **dialog opened from the sign-in page** (no `/forgot-password` route). Reset password is a page at `/reset-password?token=…` · Backend ✅ `POST forgot-password` (202 always), `POST reset-password` (204; 400 bad token)
 
 Follow `00-design-system.md`. Paste its Stitch preamble first.
 

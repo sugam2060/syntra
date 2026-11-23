@@ -1,0 +1,152 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* Syntra design tokens (frontend/design/00-design-system.md) */
+  --color-surface: var(--surface);
+  --color-primary-hover: var(--primary-hover);
+  --color-ai: var(--ai);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-card: 10px;
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #14141a;
+  --surface: #fafafb;
+  --card: #ffffff;
+  --card-foreground: #14141a;
+  --popover: #ffffff;
+  --popover-foreground: #14141a;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --secondary: #fafafb;
+  --secondary-foreground: #14141a;
+  --muted: #fafafb;
+  --muted-foreground: #6b6b78;
+  --accent: #f1f0fd;
+  --accent-foreground: #14141a;
+  --ai: #8b5cf6;
+  --success: #16a34a;
+  --warning: #d97706;
+  --info: #0284c7;
+  --destructive: #dc2626;
+  --border: #e6e6eb;
+  --input: #e6e6eb;
+  --ring: #4f46e5;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.375rem;
+  --sidebar: #fafafb;
+  --sidebar-foreground: #14141a;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f0fd;
+  --sidebar-accent-foreground: #14141a;
+  --sidebar-border: #e6e6eb;
+  --sidebar-ring: #4f46e5;
+}
+
+.dark {
+  --background: #0b0b0f;
+  --foreground: #ededf2;
+  --surface: #121218;
+  --card: #181820;
+  --card-foreground: #ededf2;
+  --popover: #181820;
+  --popover-foreground: #ededf2;
+  --primary: #7c74f5;
+  --primary-hover: #6c63f0;
+  --primary-foreground: #0b0b0f;
+  --secondary: #121218;
+  --secondary-foreground: #ededf2;
+  --muted: #121218;
+  --muted-foreground: #9a9aa8;
+  --accent: #171628;
+  --accent-foreground: #ededf2;
+  --ai: #a78bfa;
+  --destructive: #dc2626;
+  --border: #26262f;
+  --input: #26262f;
+  --ring: #7c74f5;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: #121218;
+  --sidebar-foreground: #ededf2;
+  --sidebar-primary: #7c74f5;
+  --sidebar-primary-foreground: #0b0b0f;
+  --sidebar-accent: #171628;
+  --sidebar-accent-foreground: #ededf2;
+  --sidebar-border: #26262f;
+  --sidebar-ring: #7c74f5;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  /* Edge draws its own reveal button; the app provides one (PasswordInput). */
+  input[type="password"]::-ms-reveal,
+  input[type="password"]::-ms-clear {
+    display: none;
+  }
+}
