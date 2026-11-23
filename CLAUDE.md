@@ -3,6 +3,8 @@
 @backend/gateway/AGENTS.md
 @backend/workflow/AGENTS.md
 
+Consider agents and skills from @/.claude folder too
+
 ## Project Overview
 
 **AI-Powered Project Management Tool.** AI agents are usable inside the app and through a public API for third-party project management tools.
@@ -15,6 +17,7 @@
 ├── backend/
 │   ├── gateway/         # NestJS: API, auth, projects, tasks, background jobs
 │   └── workflow/        # Python: FastAPI + LangGraph + LangChain (AI agents)
+├── .claude/agents/      # Subagents (code-documenter)
 ├── docker-compose.yml
 └── CLAUDE.md
 ```
@@ -47,6 +50,15 @@
    - For non-trivial features, follow Plan → Implement → Review (Superpowers skills).
    - Use Context7 for current docs on NestJS, LangGraph, LangChain, Drizzle, etc.
 5. **Code quality**: clean, modular, production-ready; clear names over clever ones; comment only when necessary; design for scalability and separation of concerns.
+6. **Documentation (mandatory)**
+   - After completing a feature, refactor, endpoint, schema, queue/event, or config change, delegate to the `code-documenter` agent before committing. Do not skip this for "small" changes that alter behavior or interfaces.
+   - Project-level docs live in Notion, routed by what changed:
+     - `backend/gateway/` and `backend/workflow/` → **AI Project Management Tool - backend Codebase docs**
+     - `frontend/` → **AI Project Management Tool - frontend codebase docs**
+   - A change spanning both sides is documented on each page separately.
+   - Code-level docs stay in the repo: TSDoc for TypeScript, Google-style docstrings for Python, module READMEs where behavior is non-trivial, `.env.example` and `CHANGELOG.md` kept in sync.
+   - Do not create a local `docs/` folder. Do not edit other Notion pages.
+   - Keep the gateway DTO ↔ workflow Pydantic contract documented on the backend page whenever either side changes.
 
 ## Commands
 

@@ -309,8 +309,9 @@ AS $$
 DECLARE
   v_user_id uuid;
 BEGIN
-  INSERT INTO public.users (email, name, email_verified_at)
-  VALUES (p_email, p_name, CASE WHEN p_email_verified THEN now() ELSE NULL END)
+  -- is_active follows verification: a new account cannot sign in until its email is verified.
+  INSERT INTO public.users (email, name, email_verified_at, is_active)
+  VALUES (p_email, p_name, CASE WHEN p_email_verified THEN now() ELSE NULL END, p_email_verified)
   RETURNING id INTO v_user_id;
 
   IF p_password_hash IS NOT NULL THEN
@@ -319,5 +320,214 @@ BEGIN
   END IF;
 
   RETURN v_user_id;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Session rotation and token lifecycle (no user context exists yet)
+-- ---------------------------------------------------------------------------
+
+-- Atomically rotates a refresh session. Returns a status instead of raising so that the
+-- revocation performed on reuse detection is committed rather than rolled back.
+--   ok      old session revoked, new session created for user_id
+--   reuse   the old token was already revoked: every session of that user is revoked
+--   invalid unknown, expired, or owned by an inactive user
+CREATE OR REPLACE FUNCTION app.auth_rotate_session(
+  p_old_hash text,
+  p_new_hash text,
+  p_expires_at timestamptz,
+  p_user_agent text,
+  p_ip inet
+)
+RETURNS TABLE (user_id uuid, status text)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_session record;
+BEGIN
+  SELECT s.id, s.user_id, s.revoked_at, s.expires_at
+  INTO v_session
+  FROM public.sessions s
+  WHERE s.refresh_token_hash = p_old_hash
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT NULL::uuid, 'invalid'::text;
+    RETURN;
+  END IF;
+
+  IF v_session.revoked_at IS NOT NULL THEN
+    UPDATE public.sessions
+    SET revoked_at = now()
+    WHERE public.sessions.user_id = v_session.user_id AND public.sessions.revoked_at IS NULL;
+    RETURN QUERY SELECT v_session.user_id, 'reuse'::text;
+    RETURN;
+  END IF;
+
+  IF v_session.expires_at <= now()
+     OR NOT EXISTS (
+       SELECT 1 FROM public.users u WHERE u.id = v_session.user_id AND u.is_active
+     ) THEN
+    RETURN QUERY SELECT NULL::uuid, 'invalid'::text;
+    RETURN;
+  END IF;
+
+  UPDATE public.sessions SET revoked_at = now() WHERE id = v_session.id;
+
+  INSERT INTO public.sessions (user_id, refresh_token_hash, user_agent, ip, expires_at)
+  VALUES (v_session.user_id, p_new_hash, p_user_agent, p_ip, p_expires_at);
+
+  RETURN QUERY SELECT v_session.user_id, 'ok'::text;
+END;
+$$;
+
+-- Logout from the refresh cookie alone. Returns true when an active session was revoked.
+CREATE OR REPLACE FUNCTION app.auth_revoke_session(p_hash text)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  UPDATE public.sessions
+  SET revoked_at = now()
+  WHERE refresh_token_hash = p_hash AND revoked_at IS NULL;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count > 0;
+END;
+$$;
+
+-- Creates a password-reset token for an active user found by email. Returns no row when
+-- the email is unknown so callers can respond identically either way.
+CREATE OR REPLACE FUNCTION app.auth_create_reset_token(
+  p_email text,
+  p_token_hash text,
+  p_expires_at timestamptz
+)
+RETURNS TABLE (user_id uuid, email text, name text)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user record;
+BEGIN
+  SELECT u.id, u.email, u.name INTO v_user
+  FROM public.users u
+  WHERE lower(u.email) = lower(p_email)
+    AND (u.is_active OR u.email_verified_at IS NULL);
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.verification_tokens
+  SET consumed_at = now()
+  WHERE public.verification_tokens.user_id = v_user.id
+    AND type = 'password_reset'
+    AND consumed_at IS NULL;
+
+  INSERT INTO public.verification_tokens (user_id, type, token_hash, expires_at)
+  VALUES (v_user.id, 'password_reset', p_token_hash, p_expires_at);
+
+  RETURN QUERY SELECT v_user.id, v_user.email, v_user.name;
+END;
+$$;
+
+-- Single-use token consumption. The UPDATE takes the row lock, so two concurrent calls with
+-- the same token cannot both succeed.
+CREATE OR REPLACE FUNCTION app.auth_consume_token(p_type text, p_token_hash text)
+RETURNS uuid
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user_id uuid;
+BEGIN
+  UPDATE public.verification_tokens
+  SET consumed_at = now()
+  WHERE token_hash = p_token_hash
+    AND type::text = p_type
+    AND consumed_at IS NULL
+    AND expires_at > now()
+  RETURNING public.verification_tokens.user_id INTO v_user_id;
+
+  RETURN v_user_id;
+END;
+$$;
+
+-- OAuth sign-up: creates the user (email already verified by the provider) and the linked
+-- account atomically. Provider tokens are intentionally not stored.
+CREATE OR REPLACE FUNCTION app.auth_create_oauth_user(
+  p_email text,
+  p_name text,
+  p_avatar_url text,
+  p_provider text,
+  p_provider_account_id text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user_id uuid;
+BEGIN
+  INSERT INTO public.users (email, name, avatar_url, email_verified_at)
+  VALUES (p_email, p_name, p_avatar_url, now())
+  RETURNING id INTO v_user_id;
+
+  INSERT INTO public.oauth_accounts (user_id, provider, provider_account_id, provider_email)
+  VALUES (v_user_id, p_provider::public.oauth_provider, p_provider_account_id, p_email);
+
+  RETURN v_user_id;
+END;
+$$;
+
+-- Creates a fresh email-verification token for an account whose email is not verified yet.
+-- Returns no row for unknown or already verified emails so callers answer identically either way.
+-- Earlier unused verification tokens of the user are superseded.
+CREATE OR REPLACE FUNCTION app.auth_create_verification_token(
+  p_email text,
+  p_token_hash text,
+  p_expires_at timestamptz
+)
+RETURNS TABLE (user_id uuid, email text, name text)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user record;
+BEGIN
+  SELECT u.id, u.email, u.name INTO v_user
+  FROM public.users u
+  WHERE lower(u.email) = lower(p_email) AND u.email_verified_at IS NULL;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.verification_tokens
+  SET consumed_at = now()
+  WHERE public.verification_tokens.user_id = v_user.id
+    AND type = 'email_verification'
+    AND consumed_at IS NULL;
+
+  INSERT INTO public.verification_tokens (user_id, type, token_hash, expires_at)
+  VALUES (v_user.id, 'email_verification', p_token_hash, p_expires_at);
+
+  RETURN QUERY SELECT v_user.id, v_user.email, v_user.name;
 END;
 $$;

@@ -1,27 +1,35 @@
 /**
- * Typed list of the permission keys seeded in drizzle/0001_seed_rbac_and_triggers.sql.
- * The database remains the source of truth (custom roles reference these rows); this constant
- * gives guards and DTOs compile-time safety. test/database/rls.e2e-spec.ts asserts parity.
+ * Every permission code, as a constant so call sites never type raw strings:
+ * `@RequiredPermission(Permission.AI_USE)`.
+ *
+ * The database stays the source of truth for role mappings (custom roles reference the
+ * `permissions` rows seeded in drizzle/0001_seed_rbac_and_triggers.sql). Adding a code means
+ * one line here plus one seed row in a new custom migration; `test/database/rls.e2e-spec.ts`
+ * fails if the two drift apart.
  */
-export const PERMISSION_KEYS = [
-  'workspace:read',
-  'workspace:update',
-  'workspace:delete',
-  'member:invite',
-  'member:remove',
-  'member:update_role',
-  'project:read',
-  'project:create',
-  'project:update',
-  'project:delete',
-  'task:read',
-  'task:create',
-  'task:update',
-  'task:delete',
-  'task:assign',
-  'comment:create',
-  'ai:use',
-  'ai:manage_keys',
-] as const;
+export const Permission = {
+  WORKSPACE_READ: 'workspace:read',
+  WORKSPACE_UPDATE: 'workspace:update',
+  WORKSPACE_DELETE: 'workspace:delete',
+  MEMBER_INVITE: 'member:invite',
+  MEMBER_REMOVE: 'member:remove',
+  MEMBER_UPDATE_ROLE: 'member:update_role',
+  PROJECT_READ: 'project:read',
+  PROJECT_CREATE: 'project:create',
+  PROJECT_UPDATE: 'project:update',
+  PROJECT_DELETE: 'project:delete',
+  TASK_READ: 'task:read',
+  TASK_CREATE: 'task:create',
+  TASK_UPDATE: 'task:update',
+  TASK_DELETE: 'task:delete',
+  TASK_ASSIGN: 'task:assign',
+  COMMENT_CREATE: 'comment:create',
+  AI_USE: 'ai:use',
+  AI_MANAGE_KEYS: 'ai:manage_keys',
+} as const;
 
-export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+/** Union of every permission code string, derived from `Permission`. */
+export type PermissionKey = (typeof Permission)[keyof typeof Permission];
+
+/** All permission codes as an array. Tests compare it with the seeded `permissions` table. */
+export const PERMISSION_KEYS: readonly PermissionKey[] = Object.values(Permission);

@@ -1,19 +1,5 @@
 import { registerAs } from '@nestjs/config';
-
-export interface DatabaseConfig {
-  url: string;
-  ssl: boolean;
-  applicationName: string;
-  pool: {
-    max: number;
-    min: number;
-    idleTimeoutMs: number;
-    connectionTimeoutMs: number;
-    maxLifetimeSeconds: number;
-  };
-  statementTimeoutMs: number;
-  idleInTransactionTimeoutMs: number;
-}
+import type { DatabaseConfig } from './types';
 
 export const DATABASE_CONFIG_KEY = 'database';
 

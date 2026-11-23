@@ -17,4 +17,5 @@ export const permissions = pgTable(
   ],
 ).enableRLS();
 
-export type Permission = typeof permissions.$inferSelect;
+/** A row of the `permissions` catalog table (not the `Permission` code constant). */
+export type PermissionRecord = typeof permissions.$inferSelect;
