@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="151 224 384 319" width="384" height="319" role="img" aria-label="syntra">
+  <title>syntra</title>
+  <defs>
+    <linearGradient id="gLeft" x1="0.35" y1="0" x2="0.1" y2="1">
+      <stop offset="0" stop-color="#00D4FF"/><stop offset="1" stop-color="#0072FF"/>
+    </linearGradient>
+    <linearGradient id="gRight" x1="0.2" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#00D8FF"/><stop offset="1" stop-color="#0A8CFF"/>
+    </linearGradient>
+    <!-- Real transparent gaps (no white strokes): ribbons are knocked out of what lies beneath -->
+    <mask id="mKey" maskUnits="userSpaceOnUse" x="100" y="200" width="500" height="380">
+      <rect x="100" y="200" width="500" height="380" fill="#fff"/>
+      <g fill="#000" stroke="#000" stroke-width="6" stroke-linejoin="miter">
+        <polygon points="433,302 465,302 511,383 432,519 390,519 470,383"/><polygon points="278,285 318,285 380,410 342,482 410,482 390,519 278,519 335,410"/>
+      </g>
+    </mask>
+    <mask id="mRight" maskUnits="userSpaceOnUse" x="100" y="200" width="500" height="380">
+      <rect x="100" y="200" width="500" height="380" fill="#fff"/>
+      <polygon points="278,285 318,285 380,410 342,482 410,482 390,519 278,519 335,410" fill="#000" stroke="#000" stroke-width="6" stroke-linejoin="miter"/>
+    </mask>
+  </defs>
+  
+  <path d="M221 248 H409 L387 302 H440 L381 465 H237 L175 302 H244 Z M228 339 L261 428 H347 L386 339 Z" fill="#1F3354" fill-rule="evenodd" mask="url(#mKey)"/>
+  <polygon points="433,302 465,302 511,383 432,519 390,519 470,383" fill="url(#gRight)" mask="url(#mRight)"/>
+  <polygon points="278,285 318,285 380,410 342,482 410,482 390,519 278,519 335,410" fill="url(#gLeft)"/>
+  
+</svg>
