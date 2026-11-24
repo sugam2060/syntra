@@ -1,11 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { createHash, randomBytes } from 'node:crypto';
 import authConfig from '../config/auth.config';
+import { generateOpaqueToken, hashToken } from '../common/utils/opaque-token.util';
 import type { AccessTokenPayload, OpaqueToken } from './types';
 
-const OPAQUE_TOKEN_BYTES = 32;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const LINK_PURPOSE = 'oauth-link';
 const LINK_INTENT_TTL_SECONDS = 10 * 60;
@@ -42,8 +41,7 @@ export class TokenService {
 
   /** Random opaque token plus the SHA-256 that is safe to store (high entropy, so no salt needed). */
   generateOpaqueToken(): OpaqueToken {
-    const token = randomBytes(OPAQUE_TOKEN_BYTES).toString('base64url');
-    return { token, hash: this.hashToken(token) };
+    return generateOpaqueToken();
   }
 
   /**
@@ -79,7 +77,7 @@ export class TokenService {
   }
 
   hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
+    return hashToken(token);
   }
 
   /** Expiry for a refresh session starting at `from`, using `REFRESH_TOKEN_TTL_DAYS`. */

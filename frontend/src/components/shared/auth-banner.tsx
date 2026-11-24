@@ -1,5 +1,5 @@
 import type { IconType } from "react-icons";
-import { LuCircleAlert, LuClock, LuMail } from "react-icons/lu";
+import { LuCircleAlert, LuCircleCheck, LuClock, LuMail } from "react-icons/lu";
 
 import { cn } from "@/lib/utils";
 import { AUTH_BANNER_VARIANT, type AuthBannerVariant } from "@/types/shared";
@@ -20,6 +20,11 @@ const VARIANT_STYLES: Record<
     container: "border-info/30 bg-info/10",
     iconColor: "text-info",
   },
+  [AUTH_BANNER_VARIANT.success]: {
+    icon: LuCircleCheck,
+    container: "border-success/30 bg-success/10",
+    iconColor: "text-success",
+  },
   [AUTH_BANNER_VARIANT.warning]: {
     icon: LuClock,
     container: "border-warning/30 bg-warning/10",
@@ -37,7 +42,12 @@ export function AuthBanner({ variant, children, action }: AuthBannerProps) {
 
   return (
     <div
-      role={variant === AUTH_BANNER_VARIANT.info ? "status" : "alert"}
+      role={
+        variant === AUTH_BANNER_VARIANT.info ||
+        variant === AUTH_BANNER_VARIANT.success
+          ? "status"
+          : "alert"
+      }
       className={cn(
         "flex items-start gap-3 rounded-card border p-3 text-foreground",
         container,

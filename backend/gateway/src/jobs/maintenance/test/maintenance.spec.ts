@@ -17,17 +17,21 @@ const appConfig = {
 
 describe('AuthDataPurgeService', () => {
   it('turns the database counts (bigint strings) into numbers', async () => {
-    const execute = jest.fn().mockResolvedValue({
-      rows: [{ sessions_deleted: '4', tokens_deleted: '2', api_keys_deleted: '0' }],
-    });
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ sessions_deleted: '4', tokens_deleted: '2', api_keys_deleted: '0' }],
+      })
+      .mockResolvedValueOnce({ rows: [{ invitations_deleted: '5' }] });
     const service = new AuthDataPurgeService({ db: { execute } } as unknown as DatabaseService);
 
     await expect(service.purge()).resolves.toEqual({
       sessionsDeleted: 4,
       tokensDeleted: 2,
       apiKeysDeleted: 0,
+      invitationsDeleted: 5,
     });
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it('reports zeros when nothing comes back', async () => {
@@ -37,12 +41,13 @@ describe('AuthDataPurgeService', () => {
       sessionsDeleted: 0,
       tokensDeleted: 0,
       apiKeysDeleted: 0,
+      invitationsDeleted: 0,
     });
   });
 });
 
 describe('MaintenanceProcessor', () => {
-  const result = { sessionsDeleted: 1, tokensDeleted: 2, apiKeysDeleted: 3 };
+  const result = { sessionsDeleted: 1, tokensDeleted: 2, apiKeysDeleted: 3, invitationsDeleted: 4 };
 
   it('runs the purge for the purge job and returns the counts', async () => {
     const purge = jest.fn().mockResolvedValue(result);

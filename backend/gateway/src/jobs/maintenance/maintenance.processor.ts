@@ -23,7 +23,7 @@ export class MaintenanceProcessor extends WorkerHost {
     // Counts only: purged rows contain token hashes and addresses that must not reach logs.
     this.logger.log(
       `Purged ${result.sessionsDeleted} sessions, ${result.tokensDeleted} tokens, ` +
-        `${result.apiKeysDeleted} API keys`,
+        `${result.apiKeysDeleted} API keys, ${result.invitationsDeleted} invitations`,
     );
     return result;
   }

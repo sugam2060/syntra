@@ -1,4 +1,9 @@
-import type { MailMessage, VerificationEmailJob, PasswordResetEmailJob } from './types';
+import type {
+  MailMessage,
+  PasswordResetEmailJob,
+  VerificationEmailJob,
+  WorkspaceInvitationEmailJob,
+} from './types';
 
 const escapeHtml = (value: string): string =>
   value
@@ -18,11 +23,22 @@ function render(
   actionLabel: string,
   link: string,
   outro: string,
+  note: string | null = null,
 ): MailMessage {
-  const text = [greeting(name), '', intro, '', `${actionLabel}: ${link}`, '', outro].join('\n');
+  const text = [
+    greeting(name),
+    '',
+    intro,
+    ...(note ? ['', note] : []),
+    '',
+    `${actionLabel}: ${link}`,
+    '',
+    outro,
+  ].join('\n');
   const html = [
     `<p>${escapeHtml(greeting(name))}</p>`,
     `<p>${escapeHtml(intro)}</p>`,
+    ...(note ? [`<blockquote>${escapeHtml(note)}</blockquote>`] : []),
     `<p><a href="${escapeHtml(link)}">${escapeHtml(actionLabel)}</a></p>`,
     `<p>${escapeHtml(outro)}</p>`,
   ].join('');
@@ -51,5 +67,22 @@ export function buildPasswordResetEmail(job: PasswordResetEmailJob): MailMessage
     'Reset password',
     job.link,
     'If you did not request this, you can ignore this message; your password will not change.',
+  );
+}
+
+export function buildWorkspaceInvitationEmail(job: WorkspaceInvitationEmailJob): MailMessage {
+  const who = job.inviterName ? `${job.inviterName} invited you` : 'You have been invited';
+  const subject = `${who} to join ${job.workspaceName}`;
+  const expires = new Date(job.expiresAt).toISOString().slice(0, 10);
+
+  return render(
+    job.email,
+    subject,
+    job.name,
+    `${who} to join ${job.workspaceName} as ${job.roleName}.`,
+    'Accept invitation',
+    job.link,
+    `This invitation expires on ${expires} (UTC). Accepting needs a verified account with this email address. If you were not expecting it, you can ignore this message.`,
+    job.message,
   );
 }

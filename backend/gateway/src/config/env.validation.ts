@@ -142,6 +142,10 @@ export class EnvironmentVariables {
   @Min(1)
   PASSWORD_RESET_TTL_MINUTES: number = 30;
 
+  @IsInt()
+  @Min(1)
+  INVITATION_TTL_DAYS: number = 7;
+
   @IsString()
   @MinLength(1)
   GOOGLE_CLIENT_ID!: string;

@@ -108,14 +108,15 @@
   --primary: #7c74f5;
   --primary-hover: #6c63f0;
   --primary-foreground: #0b0b0f;
-  --secondary: #121218;
+  --secondary: #1e1e28;
   --secondary-foreground: #ededf2;
-  --muted: #121218;
+  --muted: #1e1e28;
   --muted-foreground: #9a9aa8;
   --accent: #171628;
   --accent-foreground: #ededf2;
   --ai: #a78bfa;
-  --destructive: #dc2626;
+  --info: #38bdf8;
+  --destructive: #f87171;
   --border: #26262f;
   --input: #26262f;
   --ring: #7c74f5;

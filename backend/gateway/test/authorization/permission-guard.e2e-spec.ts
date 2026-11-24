@@ -14,7 +14,7 @@ import {
 import { Public } from '../../src/common/decorators/public.decorator';
 import { FixtureUser, WorkspaceFixture } from './helpers/workspace-fixture';
 
-/** Test-only routes: the app has no workspace-scoped controller yet. */
+/** Test-only routes, so the guard is exercised independently of any feature module. */
 @Controller('workspaces/:workspaceId/probe')
 class ProbeController {
   @Get('ai')

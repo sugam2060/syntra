@@ -12,6 +12,7 @@ You are working inside the **Next.js frontend** (`frontend/`) of the AI-Powered 
 - Tailwind CSS
 - shadcn/ui (components live in `src/components/ui`)
 - TanStack Query (all server state)
+- Zustand (client-only UI preferences such as theme and sidebar state, persisted in `localStorage`; never server data)
 - TanStack Form + Zod (forms and validation)
 - Sonner via shadcn (toasts)
 - react-icons (icons)
@@ -44,6 +45,7 @@ frontend/
 │   │   └── shared/               # Types used by 2+ pages (auth-user, api-error, ...)
 │   ├── lib/                      # api-client.ts (fetch wrapper), query client, env, utils (cn)
 │   ├── hooks/                    # Shared hooks
+│   ├── stores/                   # Zustand stores (theme.store.ts, sidebar.store.ts), persisted with `skipHydration`
 │   ├── providers/                # QueryProvider, etc.
 │   └── proxy.ts                  # Request proxy (replaces middleware.ts)
 ├── public/
@@ -122,9 +124,10 @@ frontend/
     - Toast on mutation outcomes. Do not toast for plain query loading states.
 
 11. **Auth**
-    - The access token lives in memory only. Never in `localStorage` or `sessionStorage`.
-    - The refresh token is an httpOnly cookie managed by the gateway. On a 401 the API client calls `/authentication/refresh` once, retries the request, and otherwise redirects to login.
-    - Send only one refresh request at a time (single-flight). Parallel refreshes look like token reuse to the gateway and revoke every session.
+    - The short-lived access token is kept in `localStorage` (`syntra:access-token`, via `src/lib/auth-token.ts`) so a reload does not need a refresh. Never put the refresh token, or any other credential, in browser storage.
+    - The refresh token is an httpOnly cookie managed by the gateway. Call `/authentication/refresh` only after the gateway answers 401 (for example `/me` with an expired token): the API client refreshes once, retries the request, and otherwise redirects to login. Never refresh on page load.
+    - Send only one refresh request at a time (single-flight in the tab, a Web Lock across tabs, and skip the call when another caller already stored a newer token). Parallel refreshes look like token reuse to the gateway and revoke every session.
+    - Security headers (CSP, nosniff, referrer and permissions policy) are set in `next.config.ts`. The CSP limits `connect-src` to the app and the gateway, and is what keeps injected script from sending the stored access token elsewhere. When a feature needs a new external host (images, API, fonts), add it there. Never render user data with `dangerouslySetInnerHTML`, and build redirect targets through `resolveSafeRedirect`.
     - The gateway runs on port 3000, so the frontend dev server runs on **3001**.
 
 12. **Config**

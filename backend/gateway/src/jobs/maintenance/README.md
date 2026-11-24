@@ -13,7 +13,7 @@ Scheduled job options: `removeOnComplete: true`, `removeOnFail: 100`.
 
 ## What is deleted
 
-The retention rules live in `app.auth_purge_expired()`.
+The retention rules live in `app.auth_purge_expired()`. The same run also calls `app.purge_workspace_invitations()`, which deletes workspace invitations that were accepted, revoked or expired more than 30 days ago (`PurgeResult.invitationsDeleted`).
 
 | Data | Deleted when |
 |---|---|

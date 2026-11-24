@@ -6,6 +6,7 @@ import {
   EmailJobName,
   type PasswordResetEmailJob,
   type VerificationEmailJob,
+  type WorkspaceInvitationEmailJob,
 } from './types';
 
 /** Enqueues transactional mail. Delivery, retries and backoff happen in the processor. */
@@ -19,5 +20,9 @@ export class EmailProducer {
 
   async sendPasswordReset(job: PasswordResetEmailJob): Promise<void> {
     await this.queue.add(EmailJobName.PasswordReset, job);
+  }
+
+  async sendWorkspaceInvitation(job: WorkspaceInvitationEmailJob): Promise<void> {
+    await this.queue.add(EmailJobName.WorkspaceInvitation, job);
   }
 }

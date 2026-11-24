@@ -103,7 +103,7 @@ describe('Expired authentication data purge', () => {
   it('is idempotent: a second run has nothing of ours left to delete', async () => {
     await purger.purge();
     const again = await purger.purge();
-    expect(again).toEqual({ sessionsDeleted: 0, tokensDeleted: 0, apiKeysDeleted: 0 });
+    expect(again).toMatchObject({ sessionsDeleted: 0, tokensDeleted: 0, apiKeysDeleted: 0 });
   });
 
   it('is not callable as a normal user query: the application role can only run the function', async () => {

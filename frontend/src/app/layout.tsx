@@ -3,7 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/providers/query-provider";
-import { ThemeProvider } from "@/providers/theme-provider";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
+import { ThemeSync } from "@/providers/theme-provider";
 
 import "./globals.css";
 
@@ -29,13 +30,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col">
-        <ThemeProvider>
-          <QueryProvider>
-            {children}
-            <Toaster />
-          </QueryProvider>
-        </ThemeProvider>
+        <ThemeSync />
+        <QueryProvider>
+          {children}
+          <Toaster />
+        </QueryProvider>
       </body>
     </html>
   );

@@ -628,3 +628,228 @@ BEGIN
   RETURN QUERY SELECT v_sessions, v_tokens, v_keys;
 END;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Workspaces and invitations
+-- Row level security hides workspaces from non-members and blocks invitees from writing their
+-- own member row, so these flows run as SECURITY DEFINER with explicit checks.
+-- ---------------------------------------------------------------------------
+
+-- True when no workspace uses the slug (case-insensitive). Callers must be signed in so the
+-- endpoint cannot be used anonymously to enumerate workspaces.
+CREATE OR REPLACE FUNCTION app.workspace_slug_available(p_slug text)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+  IF app.current_user_id() IS NULL THEN
+    RAISE EXCEPTION 'workspace_slug_available requires an authenticated user context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NOT EXISTS (
+    SELECT 1 FROM public.workspaces w WHERE lower(w.slug) = lower(p_slug)
+  );
+END;
+$$;
+
+-- What the accept page needs to show before sign-in, looked up by the SHA-256 of the emailed
+-- token. Returns no row for an unknown token and never exposes ids.
+CREATE OR REPLACE FUNCTION app.preview_workspace_invitation(p_token_hash text)
+RETURNS TABLE (
+  workspace_name text,
+  role_name text,
+  inviter_name text,
+  invited_email text,
+  status text,
+  expires_at timestamptz
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+  SELECT w.name,
+         r.name,
+         u.name,
+         i.email,
+         CASE
+           WHEN i.accepted_at IS NOT NULL THEN 'accepted'
+           WHEN i.revoked_at IS NOT NULL THEN 'revoked'
+           WHEN i.expires_at <= now() THEN 'expired'
+           ELSE 'pending'
+         END,
+         i.expires_at
+  FROM public.workspace_invitations i
+  JOIN public.workspaces w ON w.id = i.workspace_id
+  JOIN public.workspace_roles r ON r.id = i.role_id
+  JOIN public.users u ON u.id = i.invited_by
+  WHERE i.token_hash = p_token_hash;
+$$;
+
+-- Pending invitations addressed to the current user's VERIFIED email, with the workspace and
+-- role names the member-only policies would otherwise hide from a non-member.
+CREATE OR REPLACE FUNCTION app.list_my_workspace_invitations()
+RETURNS TABLE (
+  invitation_id uuid,
+  workspace_name text,
+  workspace_slug text,
+  role_name text,
+  inviter_name text,
+  expires_at timestamptz,
+  created_at timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user_id uuid := app.current_user_id();
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'list_my_workspace_invitations requires an authenticated user context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN QUERY
+  SELECT i.id, w.name, w.slug, r.name, u.name, i.expires_at, i.created_at
+  FROM public.users me
+  JOIN public.workspace_invitations i ON lower(i.email) = lower(me.email)
+  JOIN public.workspaces w ON w.id = i.workspace_id
+  JOIN public.workspace_roles r ON r.id = i.role_id
+  JOIN public.users u ON u.id = i.invited_by
+  WHERE me.id = v_user_id
+    AND me.email_verified_at IS NOT NULL
+    AND me.is_active
+    AND i.accepted_at IS NULL
+    AND i.revoked_at IS NULL
+    AND i.expires_at > now()
+  ORDER BY i.created_at DESC;
+END;
+$$;
+
+-- Accepts an invitation addressed to the current user, by emailed token hash OR by invitation id
+-- (exactly one). The invitee's email must be verified and match the invitation (case-insensitive).
+-- The single UPDATE takes the row lock, so two concurrent accepts cannot both succeed. The owner
+-- role is never granted through an invitation. Already being a member is not an error: the
+-- invitation is consumed and the workspace id is returned. Returns the workspace id.
+--   42501 email_not_verified   the caller has no verified email
+--   P0002 invitation_invalid   unknown, expired, revoked, used, or not addressed to the caller
+--   22023                      wrong argument combination
+CREATE OR REPLACE FUNCTION app.accept_workspace_invitation(p_token_hash text, p_invitation_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user_id uuid := app.current_user_id();
+  v_email text;
+  v_workspace_id uuid;
+  v_role_id uuid;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'accept_workspace_invitation requires an authenticated user context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF (p_token_hash IS NULL) = (p_invitation_id IS NULL) THEN
+    RAISE EXCEPTION 'provide exactly one of token hash and invitation id'
+      USING ERRCODE = '22023';
+  END IF;
+
+  SELECT lower(u.email) INTO v_email
+  FROM public.users u
+  WHERE u.id = v_user_id AND u.is_active AND u.email_verified_at IS NOT NULL;
+
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION 'email_not_verified' USING ERRCODE = '42501';
+  END IF;
+
+  UPDATE public.workspace_invitations i
+  SET accepted_at = now()
+  FROM public.workspace_roles r
+  WHERE r.id = i.role_id
+    AND NOT (r.is_system AND r.key = 'owner')
+    AND ((p_token_hash IS NOT NULL AND i.token_hash = p_token_hash)
+         OR (p_invitation_id IS NOT NULL AND i.id = p_invitation_id))
+    AND i.accepted_at IS NULL
+    AND i.revoked_at IS NULL
+    AND i.expires_at > now()
+    AND lower(i.email) = v_email
+  RETURNING i.workspace_id, i.role_id INTO v_workspace_id, v_role_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'invitation_invalid' USING ERRCODE = 'P0002';
+  END IF;
+
+  INSERT INTO public.workspace_members (workspace_id, user_id, role_id)
+  VALUES (v_workspace_id, v_user_id, v_role_id)
+  ON CONFLICT (workspace_id, user_id) DO NOTHING;
+
+  RETURN v_workspace_id;
+END;
+$$;
+
+-- Declines (revokes) a pending invitation addressed to the current user's verified email.
+-- Returns false when there is nothing to decline.
+CREATE OR REPLACE FUNCTION app.decline_workspace_invitation(p_invitation_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_user_id uuid := app.current_user_id();
+  v_email text;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'decline_workspace_invitation requires an authenticated user context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT lower(u.email) INTO v_email
+  FROM public.users u
+  WHERE u.id = v_user_id AND u.is_active AND u.email_verified_at IS NOT NULL;
+
+  IF v_email IS NULL THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.workspace_invitations i
+  SET revoked_at = now()
+  WHERE i.id = p_invitation_id
+    AND i.accepted_at IS NULL
+    AND i.revoked_at IS NULL
+    AND lower(i.email) = v_email;
+
+  RETURN FOUND;
+END;
+$$;
+
+-- Deletes invitations that were accepted, revoked or expired more than 30 days ago. Pending and
+-- recently finished invitations are kept. Returns how many rows were removed.
+CREATE OR REPLACE FUNCTION app.purge_workspace_invitations()
+RETURNS bigint
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_deleted bigint;
+BEGIN
+  DELETE FROM public.workspace_invitations
+  WHERE expires_at < now() - interval '30 days'
+     OR revoked_at < now() - interval '30 days'
+     OR accepted_at < now() - interval '30 days';
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted;
+END;
+$$;

@@ -67,7 +67,7 @@ export function RegisterSuccess({ email, onStartOver }: RegisterSuccessProps) {
           rel="noopener noreferrer"
           className={cn(
             buttonVariants({ variant: "outline", size: "lg" }),
-            "h-10 w-full gap-2 bg-card px-4 hover:bg-surface sm:h-9 dark:bg-card dark:hover:bg-surface",
+            "h-10 w-full gap-2 bg-card px-4 hover:bg-surface sm:h-9",
           )}
         >
           Open Gmail

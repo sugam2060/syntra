@@ -18,6 +18,7 @@ import { PasswordInput } from "@/components/shared/password-input";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup } from "@/components/ui/field";
 import { ApiError } from "@/lib/api-error";
+import { resolveSafeRedirect } from "@/lib/safe-redirect";
 import type { LoginFormStatus } from "@/types/login";
 import {
   EMAIL_MAX_LENGTH,
@@ -72,7 +73,7 @@ export function LoginForm() {
       };
       try {
         await login.mutateAsync(credentials);
-        router.replace("/");
+        router.replace(resolveSafeRedirect(searchParams.get("next")));
       } catch (error: unknown) {
         setStatus(statusFromError(error, credentials.email));
       }

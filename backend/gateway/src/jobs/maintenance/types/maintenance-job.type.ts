@@ -11,4 +11,5 @@ export interface PurgeResult {
   sessionsDeleted: number;
   tokensDeleted: number;
   apiKeysDeleted: number;
+  invitationsDeleted: number;
 }

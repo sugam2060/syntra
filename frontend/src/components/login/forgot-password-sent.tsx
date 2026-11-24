@@ -85,7 +85,7 @@ export function ForgotPasswordSent({ email }: ForgotPasswordSentProps) {
             <Button
               variant="outline"
               size="lg"
-              className="h-10 w-full bg-card hover:bg-surface sm:h-9 dark:bg-card dark:hover:bg-surface"
+              className="h-10 w-full bg-card hover:bg-surface sm:h-9"
             />
           }
         >

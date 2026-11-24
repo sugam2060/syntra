@@ -7,6 +7,7 @@ const TONE_STYLES: Record<AuthStatusTone, string> = {
   [AUTH_STATUS_TONE.primary]: "bg-accent text-primary",
   [AUTH_STATUS_TONE.success]: "bg-success/10 text-success",
   [AUTH_STATUS_TONE.warning]: "bg-warning/10 text-warning",
+  [AUTH_STATUS_TONE.danger]: "bg-destructive/10 text-destructive",
 };
 
 type AuthStatusIconProps = {

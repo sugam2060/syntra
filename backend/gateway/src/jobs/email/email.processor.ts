@@ -1,13 +1,18 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
-import { buildPasswordResetEmail, buildVerificationEmail } from './email-templates';
+import {
+  buildPasswordResetEmail,
+  buildVerificationEmail,
+  buildWorkspaceInvitationEmail,
+} from './email-templates';
 import { MailerService } from './mailer.service';
 import {
   EMAIL_QUEUE,
   EmailJobName,
   type PasswordResetEmailJob,
   type VerificationEmailJob,
+  type WorkspaceInvitationEmailJob,
 } from './types';
 
 /** Worker for the `email` queue. Throwing from `process` makes BullMQ retry per the queue's default job options. */
@@ -26,6 +31,11 @@ export class EmailProcessor extends WorkerHost {
         break;
       case EmailJobName.PasswordReset:
         await this.mailer.send(buildPasswordResetEmail(job.data as PasswordResetEmailJob));
+        break;
+      case EmailJobName.WorkspaceInvitation:
+        await this.mailer.send(
+          buildWorkspaceInvitationEmail(job.data as WorkspaceInvitationEmailJob),
+        );
         break;
       default:
         // Payloads carry one-time links, so only the job name is logged.

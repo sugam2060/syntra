@@ -21,16 +21,18 @@ import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
 import mailConfig from './config/mail.config';
 import redisConfig from './config/redis.config';
+import workspaceConfig from './config/workspace.config';
 import { DatabaseModule } from './database/database.module';
 import { MaintenanceModule } from './jobs/maintenance/maintenance.module';
 import { QueueModule } from './jobs/queue.module';
+import { WorkspacesModule } from './workspaces/workspaces.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      load: [appConfig, authConfig, databaseConfig, mailConfig, redisConfig],
+      load: [appConfig, authConfig, databaseConfig, mailConfig, redisConfig, workspaceConfig],
       validate: validateEnv,
     }),
     ThrottlerModule.forRootAsync({
@@ -52,6 +54,7 @@ import { QueueModule } from './jobs/queue.module';
     AuthenticationModule,
     AuthorizationModule,
     ApiKeysModule,
+    WorkspacesModule,
     RouteAuditModule,
   ],
   controllers: [AppController],

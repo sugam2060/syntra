@@ -87,4 +87,4 @@ The Drizzle row type for the `permissions` table is `PermissionRecord` (not `Per
 ## Tests
 
 - Unit: `src/authorization/test/` (`npm test`): decorators, constant, service. The guard spec is `src/common/test/permission.guard.spec.ts`; the route audit spec is `src/common/test/route-audit.util.spec.ts`.
-- Integration and HTTP: `test/authorization/` (`npm run test:e2e`; needs the containers up and `npm run db:migrate` applied). `permission-service.e2e-spec.ts` checks owner, roles and overrides against the real database. `permission-guard.e2e-spec.ts` mounts a test-only `ProbeController` under `/workspaces/:workspaceId/probe`, because the app has no workspace-scoped controller yet.
+- Integration and HTTP: `test/authorization/` (`npm run test:e2e`; needs the containers up and `npm run db:migrate` applied). `permission-service.e2e-spec.ts` checks owner, roles and overrides against the real database. `permission-guard.e2e-spec.ts` mounts a test-only `ProbeController` under `/workspaces/:workspaceId/probe`, so the guard is tested on its own, independent of any feature module. The real workspace routes (`src/workspaces`) are covered in `test/workspaces/`.

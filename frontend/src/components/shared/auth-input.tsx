@@ -9,7 +9,7 @@ export function AuthInput({
   return (
     <Input
       className={cn(
-        "h-10 bg-background aria-invalid:ring-0 sm:h-9 dark:bg-surface dark:aria-invalid:ring-0",
+        "h-10 aria-invalid:ring-0 sm:h-9 dark:aria-invalid:ring-0",
         className,
       )}
       {...props}
